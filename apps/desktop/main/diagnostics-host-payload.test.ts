@@ -177,8 +177,8 @@ describe('collectDiagnosticsHostPayload', () => {
 });
 
 describe('pins', () => {
-  it('leaves Electron 43.4.0 and the 32 MiB protocol cap unchanged', () => {
-    expect(desktopPackage.devDependencies?.electron).toBe('43.4.0');
+  it('pins Electron 43.7.9 and keeps the 32 MiB protocol cap', () => {
+    expect(desktopPackage.devDependencies?.electron).toBe('43.7.9');
     expect(FRAME_HARD_CAP_BYTES).toBe(32 * 1024 * 1024);
   });
 });

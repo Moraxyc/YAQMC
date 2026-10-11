@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 export const PACK03_ID = 'PACK-03';
 export const APP_ID = 'org.yaqmc.desktop';
 export const PRODUCT_NAME = 'YAQMC';
-export const ELECTRON_VERSION = '43.4.0';
+export const ELECTRON_VERSION = '43.7.9';
 export const BUILDER_VERSION = '26.15.7';
 export const OUTPUT_DIR_NAME = 'release-electron';
 export const LINUX_TARGETS = ['AppImage', 'deb', 'rpm', 'tar.gz'];
@@ -99,7 +99,7 @@ export function parseBuilderLinux(yaml) {
     windowsSigningDisabled:
       /^\s*forceCodeSigning:\s*false\s*$/m.test(yaml.replaceAll('\r', '')) ||
       /^\s*signExecutable:\s*false\s*$/m.test(yaml.replaceAll('\r', '')),
-    electronVersion: /^\s*electronVersion:\s*43\.4\.0\s*$/m.test(yaml.replaceAll('\r', '')),
+    electronVersion: /^\s*electronVersion:\s*43\.7\.9\s*$/m.test(yaml.replaceAll('\r', '')),
   };
 }
 

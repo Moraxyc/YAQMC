@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const CI03_ID = 'CI-03';
-export const ELECTRON_VERSION = '43.4.0';
+export const ELECTRON_VERSION = '43.7.9';
 export const BUILDER_VERSION = '26.15.7';
 export const WINDOWS_CORE_TRIPLE = 'aarch64-pc-windows-msvc';
 export const LINUX_CORE_TRIPLE = 'aarch64-unknown-linux-gnu';

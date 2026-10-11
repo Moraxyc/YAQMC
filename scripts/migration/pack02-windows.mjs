@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 export const PACK02_ID = 'PACK-02';
 export const APP_ID = 'org.yaqmc.desktop';
 export const PRODUCT_NAME = 'YAQMC';
-export const ELECTRON_VERSION = '43.4.0';
+export const ELECTRON_VERSION = '43.7.9';
 export const BUILDER_VERSION = '26.15.7';
 export const OUTPUT_DIR_NAME = 'release-electron';
 export const NSIS = { oneClick: false, perMachine: false };

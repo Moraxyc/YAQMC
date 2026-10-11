@@ -22,7 +22,7 @@ describe('PACK-01 electron-builder', () => {
       homepage?: string;
       scripts?: Record<string, string>;
     };
-    expect(pkg.devDependencies?.electron).toBe('43.4.0');
+    expect(pkg.devDependencies?.electron).toBe('43.7.9');
     expect(pkg.devDependencies?.['electron-builder']).toBe('26.15.7');
     expect(pkg.dependencies?.['electron-updater']).toBe('6.8.9');
     expect(pkg.author).toBe('YAQMC contributors');
@@ -45,7 +45,7 @@ describe('PACK-01 electron-builder', () => {
     expect(yaml).toContain('productName: YAQMC');
     expect(yaml).toContain('asar: true');
     expect(yaml).not.toContain('harness/**');
-    expect(yaml).toContain('electronVersion: 43.4.0');
+    expect(yaml).toContain('electronVersion: 43.7.9');
     expect(yaml).toMatch(/protocols:[\s\S]*schemes:[\s\S]*- yaqmc/);
     expect(yaml).not.toContain('electronDist:');
     expect(yaml).toContain('from: resources/core');

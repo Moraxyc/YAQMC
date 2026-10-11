@@ -52,9 +52,9 @@ describe('PACK-04 handshake version equality', () => {
     expect(build).toContain('__YAQMC_BUILD_TYPE__');
   });
 
-  it('leaves Electron 43.4.0, pins electron-updater 6.8.9, and keeps the 32 MiB cap', () => {
+  it('pins Electron 43.7.9 and electron-updater 6.8.9, and keeps the 32 MiB cap', () => {
     const pkg = readJson('apps/desktop/package.json');
-    expect(pkg.devDependencies?.electron).toBe('43.4.0');
+    expect(pkg.devDependencies?.electron).toBe('43.7.9');
     expect(pkg.dependencies?.['electron-updater']).toBe('6.8.9');
     expect(FRAME_HARD_CAP_BYTES).toBe(32 * 1024 * 1024);
   });
