@@ -51,21 +51,21 @@
   inset: 0;
 }
 
-:root[data-platform='linux'] .lyrics-fullscreen-transport,
+:root[data-platform='linux'] .lyrics-fullscreen-transport__bar,
 :root[data-platform='linux']
   .lyrics-stage[data-cover-layout='full']
   .lyrics-stage__viewport::before,
 :root[data-platform='linux'] .lyrics-surface--desktop::before,
 :root[data-platform='linux'] .lyrics-surface--desktop::after,
 :root[data-platform='linux'] .island-card,
-:root[data-platform='windows'] .lyrics-fullscreen-transport,
+:root[data-platform='windows'] .lyrics-fullscreen-transport__bar,
 :root[data-platform='windows']
   .lyrics-stage[data-cover-layout='full']
   .lyrics-stage__viewport::before,
 :root[data-platform='windows'] .lyrics-surface--desktop::before,
 :root[data-platform='windows'] .lyrics-surface--desktop::after,
 :root[data-platform='windows'] .island-card,
-:root[data-platform='android'] .lyrics-fullscreen-transport,
+:root[data-platform='android'] .lyrics-fullscreen-transport__bar,
 :root[data-platform='android']
   .lyrics-stage[data-cover-layout='full']
   .lyrics-stage__viewport::before,
@@ -76,10 +76,10 @@
   -webkit-backdrop-filter: none;
 }
 
-:root[data-platform='linux'] .lyrics-fullscreen-transport,
-:root[data-platform='windows'] .lyrics-fullscreen-transport,
-:root[data-platform='android'] .lyrics-fullscreen-transport {
-  background: color-mix(in srgb, var(--bg-opaque) 94%, var(--surface));
+:root[data-platform='linux'] .lyrics-fullscreen-transport__bar,
+:root[data-platform='windows'] .lyrics-fullscreen-transport__bar,
+:root[data-platform='android'] .lyrics-fullscreen-transport__bar {
+  background: color-mix(in srgb, var(--transport-surface, var(--bg-opaque)) 94%, transparent);
 }
 
 :root[data-platform='linux'] .island-card,
@@ -116,7 +116,7 @@
 
 /* Runtime A/B probes. Not a production visual mode. */
 :root[data-compositor-probe='no-backdrop'] .topbar,
-:root[data-compositor-probe='no-backdrop'] .lyrics-fullscreen-transport,
+:root[data-compositor-probe='no-backdrop'] .lyrics-fullscreen-transport__bar,
 :root[data-compositor-probe='no-backdrop']
   .lyrics-stage[data-cover-layout='full']
   .lyrics-stage__viewport::before,

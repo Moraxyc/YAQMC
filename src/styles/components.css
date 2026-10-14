@@ -1397,6 +1397,9 @@ input[type='range']:disabled {
  * Presets only change action order, color tokens and metric sizes, so every
  * control keeps a >= 44px hit area and the bar can wrap instead of overflowing. */
 .lyrics-transport {
+  /* Shared stage controls also render outside the scene that defines lyric ink. */
+  --lyrics-ink: var(--transport-text, var(--text));
+  --lyrics-ink-contrast: var(--transport-surface, var(--bg-opaque));
   display: flex;
   width: 100%;
   max-width: min(560px, 100%);
