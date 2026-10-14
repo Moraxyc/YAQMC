@@ -247,6 +247,14 @@ describe('preference persistence model', () => {
     expect(usePreferencesStore.getState().lyrics.timingOffsetMs).toBe(320);
   });
 
+  it('preserves Traditional Chinese across native preferences and the startup cache', () => {
+    expect(normalizePreferences({ locale: 'zh-TW' }).locale).toBe('zh-TW');
+    usePreferencesStore.getState().setLocale('zh-TW');
+    expect(window.localStorage.getItem('yaqmc.locale')).toBe('zh-TW');
+    usePreferencesStore.getState().setLocale('system');
+    expect(window.localStorage.getItem('yaqmc.locale')).toBeNull();
+  });
+
   it('writes and clears the synchronous explicit-locale startup cache', () => {
     usePreferencesStore.getState().setLocale('zh-CN');
     expect(window.localStorage.getItem('yaqmc.locale')).toBe('zh-CN');

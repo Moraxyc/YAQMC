@@ -7,6 +7,7 @@ export {
   TRAY_I18N_KEYS,
   TRAY_MENU_IDS,
   ZH_CN_TRAY_LABELS,
+  ZH_TW_TRAY_LABELS,
   localeFromPreferences,
   resolveTrayLabels,
   trayLabelsForLocale,

@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::{ErrorCode, DEFAULT_METHOD_PAYLOAD_BYTES, FRAME_HARD_CAP_BYTES};
 
 const PLUGIN_READ_ASSET_RESPONSE_CAP: u32 = 6 * 1024 * 1024;
+// Public playlist details include every paginated track, unlike feed previews.
+const PLAYLIST_DETAIL_RESPONSE_CAP: u32 = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -756,6 +758,8 @@ const fn timeout_class(name: &str) -> TimeoutClass {
         || const_eq(name, "diagnostics_export_bundle_to")
         || const_eq(name, "statistics_export_to")
         || const_eq(name, "platform_export_diagnostics")
+        || const_eq(name, "provider_playlist")
+        || const_eq(name, "qqmusic_playlist")
     {
         TimeoutClass::Long
     } else {
@@ -766,6 +770,8 @@ const fn timeout_class(name: &str) -> TimeoutClass {
 const fn response_cap(name: &str) -> u32 {
     if const_eq(name, "plugin_read_asset") {
         PLUGIN_READ_ASSET_RESPONSE_CAP
+    } else if const_eq(name, "provider_playlist") || const_eq(name, "qqmusic_playlist") {
+        PLAYLIST_DETAIL_RESPONSE_CAP
     } else {
         DEFAULT_METHOD_PAYLOAD_BYTES
     }

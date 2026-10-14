@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { create } from 'zustand';
 import i18n, { LOCALE_CACHE_KEY, resolveLocale, type LocalePreference } from '../i18n';
+import { supportedLocales } from '../locales';
 import {
   generateThemeTokens,
   isValidHexColor,
@@ -304,7 +305,7 @@ export function normalizePreferences(value: unknown): AppPreferences {
   const resolvedPreset = resolveLyricsPreset(lyricsPresets);
   return {
     version: 2,
-    locale: valueIn(source.locale, ['system', 'en-US', 'zh-CN'], 'system'),
+    locale: valueIn(source.locale, ['system', ...supportedLocales], 'system'),
     appearance: {
       colorMode: valueIn(appearance.colorMode, ['system', 'light', 'dark'], 'system'),
       interfaceFontScale: numberInRange(appearance.interfaceFontScale, 100, 80, 130),

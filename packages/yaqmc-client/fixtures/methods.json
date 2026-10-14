@@ -320,9 +320,9 @@
     "name": "provider_playlist",
     "owner": "core",
     "requestCap": 1048576,
-    "responseCap": 1048576,
-    "timeoutClass": "standard",
-    "timeoutMs": 30000
+    "responseCap": 16777216,
+    "timeoutClass": "long",
+    "timeoutMs": 120000
   },
   {
     "allowedOrigins": [
@@ -814,9 +814,9 @@
     "name": "qqmusic_playlist",
     "owner": "core",
     "requestCap": 1048576,
-    "responseCap": 1048576,
-    "timeoutClass": "standard",
-    "timeoutMs": 30000
+    "responseCap": 16777216,
+    "timeoutClass": "long",
+    "timeoutMs": 120000
   },
   {
     "allowedOrigins": [

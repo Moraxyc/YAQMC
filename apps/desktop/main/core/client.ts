@@ -20,6 +20,8 @@ const LONG_METHODS = new Set([
   'diagnostics_export_bundle_to',
   'statistics_export_to',
   'platform_export_diagnostics',
+  'provider_playlist',
+  'qqmusic_playlist',
 ]);
 
 const KNOWN_KINDS = new Set([

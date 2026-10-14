@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type EntityDetailStatus = 'loading' | 'ready' | 'error';
 
@@ -6,6 +6,7 @@ export interface EntityDetailResource<T> {
   status: EntityDetailStatus;
   data: T | null;
   error: Error | null;
+  retry: () => void;
 }
 
 function asError(error: unknown): Error {
@@ -18,7 +19,9 @@ export function useEntityDetail<T>(
   preview?: T,
 ): EntityDetailResource<T> {
   const requestVersion = useRef(0);
-  const [resource, setResource] = useState<EntityDetailResource<T>>({
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((current) => current + 1), []);
+  const [resource, setResource] = useState<Omit<EntityDetailResource<T>, 'retry'>>({
     status: 'loading',
     data: preview ?? null,
     error: null,
@@ -46,7 +49,7 @@ export function useEntityDetail<T>(
       controller.abort();
       if (requestVersion.current === version) requestVersion.current += 1;
     };
-  }, [id, load, preview]);
+  }, [attempt, id, load, preview]);
 
-  return resource;
+  return { ...resource, retry };
 }

@@ -308,6 +308,7 @@ export const zhCN = {
       artistLabel: '歌手',
     },
     playlist: {
+      empty: '该歌单暂时没有歌曲。',
       eyebrow: '歌单',
       play: '播放',
       shuffle: '随机播放',
@@ -616,6 +617,7 @@ export const zhCN = {
       languageLabel: '应用语言',
       localeSystem: '跟随系统',
       localeChinese: '简体中文',
+      localeTraditionalChinese: '繁體中文',
       localeEnglish: 'English',
     },
     appearance: {

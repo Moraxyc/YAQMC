@@ -389,6 +389,13 @@ describe('PlaylistPage account projection', () => {
     });
   });
 
+  it('shows a genuine empty playlist and disables playback actions', () => {
+    render(<PlaylistPage playlist={{ ...playlists[0]!, tracks: [] }} />);
+    expect(screen.getByRole('status')).toHaveTextContent('This playlist has no songs yet.');
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Shuffle' })).toBeDisabled();
+  });
+
   it('shows an operation-specific uncertainty message without a playlist name', () => {
     const summary = accountSummary();
     useAccountStore.setState({

@@ -59,7 +59,10 @@ fn method_caps_never_exceed_the_hard_cap_and_default_to_one_mib() {
     for spec in methods() {
         assert!(spec.request_cap > 0 && spec.request_cap <= FRAME_HARD_CAP_BYTES);
         assert!(spec.response_cap > 0 && spec.response_cap <= FRAME_HARD_CAP_BYTES);
-        if spec.name != "plugin_read_asset" {
+        if !matches!(
+            spec.name,
+            "plugin_read_asset" | "provider_playlist" | "qqmusic_playlist"
+        ) {
             assert_eq!(spec.request_cap, DEFAULT_METHOD_PAYLOAD_BYTES);
             assert_eq!(spec.response_cap, DEFAULT_METHOD_PAYLOAD_BYTES);
         }
@@ -265,5 +268,18 @@ fn window_origin_wire_names_match_the_attach_roles() {
             serde_json::from_str::<WindowOrigin>(&format!("\"{name}\"")).expect("parse origin"),
             origin
         );
+    }
+}
+
+#[test]
+fn playlist_details_allow_large_catalogs_with_bounded_response_and_unchanged_request_cap() {
+    for name in ["provider_playlist", "qqmusic_playlist"] {
+        let spec = method(name).expect(name);
+        assert_eq!(spec.request_cap, DEFAULT_METHOD_PAYLOAD_BYTES);
+        assert_eq!(spec.response_cap, 16 * 1024 * 1024);
+        assert!(spec.accepts_response_bytes(2_360_365));
+        assert!(!spec.accepts_response_bytes(spec.response_cap + 1));
+        assert_eq!(spec.timeout_class, TimeoutClass::Long);
+        assert!(!spec.allows(WindowOrigin::LyricsDesktop));
     }
 }

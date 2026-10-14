@@ -159,6 +159,7 @@ export function PlaylistPage({
             <button
               type="button"
               className="button button--primary"
+              disabled={playlist.tracks.length === 0}
               onClick={() => playTracks(playlist.tracks, undefined, false)}
             >
               <Play size={16} fill="currentColor" />
@@ -168,13 +169,17 @@ export function PlaylistPage({
               type="button"
               className="button button--secondary"
               aria-pressed={shuffle}
+              disabled={playlist.tracks.length === 0}
               onClick={() => playTracks(playlist.tracks, undefined, !shuffle)}
             >
               <Shuffle size={16} />
               {shuffle ? t('ordered') : t('shuffle')}
             </button>
             <ActionMenu label={t('more')} className="detail-hero__icon-action">
-              <ActionMenuItem onClick={() => addTracksToQueue(playlist.tracks)}>
+              <ActionMenuItem
+                disabled={playlist.tracks.length === 0}
+                onClick={() => addTracksToQueue(playlist.tracks)}
+              >
                 {t('addToQueue')}
               </ActionMenuItem>
               {canChangeCollection && (
@@ -274,7 +279,13 @@ export function PlaylistPage({
       </section>
 
       <section className="detail-track-section" aria-label={t('tracks', { title: playlist.title })}>
-        <TrackList tracks={playlist.tracks} showAlbum />
+        {playlist.tracks.length === 0 && !hasMore && !loadingMore ? (
+          <p className="empty-state" role="status">
+            {t('empty')}
+          </p>
+        ) : (
+          <TrackList tracks={playlist.tracks} showAlbum />
+        )}
         {(hasMore || loadingMore) && (
           <div className="account-library-pagination">
             <button type="button" disabled={loadingMore} onClick={onLoadMore}>

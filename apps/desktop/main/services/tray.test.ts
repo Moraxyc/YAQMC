@@ -22,6 +22,7 @@ import {
 } from './tray';
 import { enUS } from '../../../../src/locales/en-US';
 import { zhCN } from '../../../../src/locales/zh-CN';
+import { zhTW } from '../../../../src/locales/zh-TW';
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const resourcesDir = path.join(desktopRoot, 'resources');
@@ -271,6 +272,10 @@ describe('tray i18n dictionary', () => {
   it('picks zh-CN or English from preferences locale without importing locale trees', () => {
     expect(trayLabelsForLocale('zh-CN')).toEqual(ZH_CN_TRAY_LABELS);
     expect(trayLabelsForLocale('zh-CN')).toEqual(zhCN.tray);
+    expect(trayLabelsForLocale('zh-TW')).toEqual(zhTW.tray);
+    expect(trayLabelsForLocale('system', 'zh_Hant_HK')).toEqual(zhTW.tray);
+    expect(trayLabelsForLocale('system', 'zh-TW')).toEqual(zhTW.tray);
+    expect(trayLabelsForLocale('system', 'zh-Hans-TW')).toEqual(ZH_CN_TRAY_LABELS);
     expect(trayLabelsForLocale('en-US')).toEqual(DEFAULT_TRAY_LABELS);
     expect(trayLabelsForLocale('system', 'zh-CN')).toEqual(ZH_CN_TRAY_LABELS);
     expect(trayLabelsForLocale('system', 'en-US')).toEqual(DEFAULT_TRAY_LABELS);

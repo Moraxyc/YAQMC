@@ -22,7 +22,26 @@ describe('internationalization', () => {
   });
 
   it('keeps major translation resources structurally complete', () => {
-    expect(keys(resources['zh-CN'])).toEqual(keys(resources['en-US']));
+    for (const locale of ['zh-CN', 'zh-TW'] as const) {
+      expect(keys(resources[locale])).toEqual(keys(resources['en-US']));
+    }
+  });
+
+  it.each(['zh-TW', 'zh-HK', 'zh-MO', 'zh-Hant', 'zh-Hant-CN', 'zh_Hant_HK'])(
+    'resolves %s as Traditional Chinese',
+    (locale) => {
+      expect(matchSupportedLocale([locale, 'en-US'])).toBe('zh-TW');
+    },
+  );
+
+  it('honors explicit scripts, preferences, and immediate Traditional Chinese switching', async () => {
+    expect(matchSupportedLocale(['zh-Hans-TW'])).toBe('zh-CN');
+    expect(resolveLocale('zh-TW', ['en-US'])).toBe('zh-TW');
+    await i18n.changeLanguage('zh-TW');
+    expect(i18n.t('navigation:home')).toBe('首頁');
+    expect(i18n.t('navigation:settings')).toBe('設定');
+    expect(i18n.t('settings:general.localeChinese')).toBe('简体中文');
+    expect(i18n.t('settings:general.localeTraditionalChinese')).toBe('繁體中文');
   });
 
   it('switches language immediately and falls back for unsupported locales', async () => {

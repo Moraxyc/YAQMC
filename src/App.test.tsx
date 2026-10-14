@@ -113,6 +113,12 @@ vi.mock('./components/Sidebar', () => ({
       >
         Navigate to plugin song
       </button>
+      <button type="button" onClick={() => onNavigate({ page: 'playlist', id: playlists[0]!.id })}>
+        Navigate to public playlist
+      </button>
+      <button type="button" onClick={() => onNavigate({ page: 'playlist', id: playlists[1]!.id })}>
+        Navigate to second public playlist
+      </button>
       <button type="button" onClick={() => onNavigate({ page: 'artist', id: 'artist-mira-vale' })}>
         Navigate to artist
       </button>
@@ -506,6 +512,76 @@ describe('App TopBar history navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Navigate to artist' }));
     expect(await screen.findByRole('heading', { name: 'Mira Vale' })).toBeVisible();
     expect(getArtist).toHaveBeenCalledWith('artist-mira-vale', expect.any(AbortSignal));
+  });
+
+  it('loads recommended playlist tracks before displaying a metadata-only preview as a detail', async () => {
+    const pending = deferred<(typeof playlists)[number]>();
+    const getPlaylist = vi.fn().mockReturnValue(pending.promise);
+    const provider = Object.assign(Object.create(fakeMusicProvider) as MusicProvider, {
+      getPlaylist,
+    });
+    appCatalog.value = {
+      status: 'ready',
+      home: { ...homeFeed, recommendedSonglists: [{ ...playlists[0]!, tracks: [] }] },
+      library: librarySnapshot,
+      message: null,
+    };
+    renderApp(provider);
+    fireEvent.click(screen.getByRole('button', { name: 'Navigate to public playlist' }));
+    expect(await screen.findByLabelText('Loading playlist')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByRole('heading', { name: playlists[0]!.title })).not.toBeInTheDocument();
+    await act(async () => pending.resolve(playlists[0]!));
+    expect(await screen.findByRole('heading', { name: playlists[0]!.title })).toBeVisible();
+    expect(screen.getByText(playlists[0]!.tracks[0]!.title)).toBeVisible();
+    expect(getPlaylist).toHaveBeenCalledWith(playlists[0]!.id, expect.any(AbortSignal));
+  });
+
+  it('reports playlist detail failure even when a preview exists and supports retry', async () => {
+    const getPlaylist = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('core.protocol: response exceeds cap'))
+      .mockResolvedValueOnce(playlists[0]!);
+    const provider = Object.assign(Object.create(fakeMusicProvider) as MusicProvider, {
+      getPlaylist,
+    });
+    appCatalog.value = {
+      status: 'ready',
+      home: { ...homeFeed, recommendedSonglists: [{ ...playlists[0]!, tracks: [] }] },
+      library: librarySnapshot,
+      message: null,
+    };
+    renderApp(provider);
+    fireEvent.click(screen.getByRole('button', { name: 'Navigate to public playlist' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('This playlist could not be loaded');
+    expect(screen.queryByRole('heading', { name: playlists[0]!.title })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { name: playlists[0]!.title })).toBeVisible();
+    expect(getPlaylist).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a late playlist detail after switching to another playlist', async () => {
+    const pending = deferred<(typeof playlists)[number]>();
+    const getPlaylist = vi.fn((id: string, _signal: AbortSignal) =>
+      id === playlists[0]!.id ? pending.promise : Promise.resolve(playlists[1]!),
+    );
+    const provider = Object.assign(Object.create(fakeMusicProvider) as MusicProvider, {
+      getPlaylist,
+    });
+    appCatalog.value = {
+      status: 'ready',
+      home: homeFeed,
+      library: librarySnapshot,
+      message: null,
+    };
+    renderApp(provider);
+    fireEvent.click(screen.getByRole('button', { name: 'Navigate to public playlist' }));
+    await waitFor(() => expect(getPlaylist).toHaveBeenCalledOnce());
+    const firstSignal = getPlaylist.mock.calls[0]![1];
+    fireEvent.click(screen.getByRole('button', { name: 'Navigate to second public playlist' }));
+    await waitFor(() => expect(firstSignal.aborted).toBe(true));
+    expect(await screen.findByRole('heading', { name: playlists[1]!.title })).toBeVisible();
+    await act(async () => pending.resolve(playlists[0]!));
+    expect(screen.getByRole('heading', { name: playlists[1]!.title })).toBeVisible();
   });
 
   it('keeps provider-scoped pages unavailable until their provider is restored', async () => {

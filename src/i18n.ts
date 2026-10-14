@@ -1,6 +1,6 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
-import { defaultLocale, resources, type SupportedLocale } from './locales';
+import { defaultLocale, resources, supportedLocales, type SupportedLocale } from './locales';
 
 export type LocalePreference = 'system' | SupportedLocale;
 export const LOCALE_CACHE_KEY = 'yaqmc.locale';
@@ -8,9 +8,12 @@ const LEGACY_LOCALE_CACHE_KEY = 'music-client.locale';
 
 export function matchSupportedLocale(locales: readonly string[]): SupportedLocale {
   for (const candidate of locales) {
-    const normalized = candidate.replace('_', '-').toLowerCase();
-    if (normalized === 'zh' || normalized.startsWith('zh-cn') || normalized.startsWith('zh-sg')) {
-      return 'zh-CN';
+    const parts = candidate.replaceAll('_', '-').toLowerCase().split('-');
+    const normalized = parts.join('-');
+    if (parts[0] === 'zh') {
+      if (parts.includes('hant')) return 'zh-TW';
+      if (parts.includes('hans')) return 'zh-CN';
+      return parts.some((part) => ['tw', 'hk', 'mo'].includes(part)) ? 'zh-TW' : 'zh-CN';
     }
     if (normalized === 'en' || normalized.startsWith('en-')) return 'en-US';
   }
@@ -29,7 +32,7 @@ function cachedLocalePreference(): LocalePreference {
   const saved =
     window.localStorage.getItem(LOCALE_CACHE_KEY) ??
     window.localStorage.getItem(LEGACY_LOCALE_CACHE_KEY);
-  return saved === 'en-US' || saved === 'zh-CN' ? saved : 'system';
+  return supportedLocales.find((locale) => locale === saved) ?? 'system';
 }
 
 const initialLocale = resolveLocale(cachedLocalePreference());

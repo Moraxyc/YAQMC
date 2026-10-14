@@ -470,6 +470,14 @@ describe('SettingsPage account section', () => {
     expect(wordJump).not.toBeChecked();
   });
 
+  it('offers a persistent Traditional Chinese interface choice independent of lyrics', () => {
+    renderSettings(accountProvider().value);
+    fireEvent.click(screen.getByRole('combobox', { name: 'Application language' }));
+    fireEvent.click(screen.getByRole('option', { name: '繁體中文' }));
+    expect(usePreferencesStore.getState().locale).toBe('zh-TW');
+    expect(window.localStorage.getItem('yaqmc.locale')).toBe('zh-TW');
+  });
+
   it('moves active-preset typography and lyrics weight into the settings page', () => {
     const account = accountProvider();
     renderSettings(account.value);

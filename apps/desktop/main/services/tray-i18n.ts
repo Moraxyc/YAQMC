@@ -54,6 +54,16 @@ export const ZH_CN_TRAY_LABELS: TrayLabels = {
   quit: '退出',
 };
 
+export const ZH_TW_TRAY_LABELS: TrayLabels = {
+  'show-hide': '顯示 / 隱藏',
+  'unlock-lyrics': '解鎖歌詞浮層',
+  'play-pause': '播放 / 暫停',
+  previous: '上一首',
+  next: '下一首',
+  settings: '設定',
+  quit: '退出',
+};
+
 export function trayLabelsFromLocale(tray: TrayLabels): TrayLabels {
   return {
     'show-hide': tray['show-hide'],
@@ -75,11 +85,18 @@ export function trayLabelsForLocale(locale: string, systemLang?: string): TrayLa
   if (locale === 'zh-CN') {
     return { ...ZH_CN_TRAY_LABELS };
   }
+  if (locale === 'zh-TW') return { ...ZH_TW_TRAY_LABELS };
   if (locale === 'en-US') {
     return { ...DEFAULT_TRAY_LABELS };
   }
-  if (locale === 'system' && (systemLang ?? '').toLowerCase().startsWith('zh')) {
-    return { ...ZH_CN_TRAY_LABELS };
+  if (locale === 'system') {
+    const parts = (systemLang ?? '').replaceAll('_', '-').toLowerCase().split('-');
+    if (parts[0] === 'zh') {
+      const traditional =
+        parts.includes('hant') ||
+        (!parts.includes('hans') && parts.some((part) => ['tw', 'hk', 'mo'].includes(part)));
+      return { ...(traditional ? ZH_TW_TRAY_LABELS : ZH_CN_TRAY_LABELS) };
+    }
   }
   return { ...DEFAULT_TRAY_LABELS };
 }

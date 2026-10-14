@@ -303,6 +303,7 @@ export const enUS = {
       artistLabel: 'Artist',
     },
     playlist: {
+      empty: 'This playlist has no songs yet.',
       eyebrow: 'PLAYLIST',
       play: 'Play',
       shuffle: 'Shuffle',
@@ -621,6 +622,7 @@ export const enUS = {
       languageLabel: 'Application language',
       localeSystem: 'System',
       localeChinese: '简体中文',
+      localeTraditionalChinese: '繁體中文',
       localeEnglish: 'English',
     },
     appearance: {

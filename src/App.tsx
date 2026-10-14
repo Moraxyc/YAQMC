@@ -882,29 +882,28 @@ function ProviderArtistPage({ id }: { id: string }) {
 
 function ProviderPlaylistPage({ id, initial }: { id: string; initial?: Playlist }) {
   const { t } = useTranslation('pages');
+  const { t: common } = useTranslation('common');
   const provider = useMusicProvider();
-  const [playlist, setPlaylist] = useState<Playlist | null>(initial ?? null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void provider
-      .getPlaylist(id, controller.signal)
-      .then(setPlaylist)
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === 'AbortError')) setFailed(true);
-      });
-    return () => controller.abort();
-  }, [id, provider]);
-
-  if (failed && !playlist) {
-    return <MissingEntity message={t('playlistLoadFailed')} />;
-  }
-  return playlist ? (
-    <PlaylistPage playlist={playlist} />
-  ) : (
-    <LoadingState label={t('loadingPlaylist')} />
+  const load = useCallback(
+    (entityId: string, signal: AbortSignal) => provider.getPlaylist(entityId, signal),
+    [provider],
   );
+  const resource = useEntityDetail(id, load, initial);
+
+  // Feed cards contain metadata only; their empty tracks are not a loaded playlist.
+  if (resource.status === 'loading') return <LoadingState label={t('loadingPlaylist')} />;
+  if (resource.status === 'error' || !resource.data) {
+    return (
+      <div className="empty-state empty-state--error">
+        <h1>{t('itemUnavailable')}</h1>
+        <p role="alert">{t('playlistLoadFailed')}</p>
+        <button type="button" className="button button--primary" onClick={resource.retry}>
+          {common('retry')}
+        </button>
+      </div>
+    );
+  }
+  return <PlaylistPage playlist={resource.data} />;
 }
 
 function ProviderAreaPage({

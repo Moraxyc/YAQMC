@@ -978,6 +978,7 @@ export function SettingsPage() {
   const languageOptions: readonly SelectOption<typeof preferences.locale>[] = [
     { value: 'system', label: t('general.localeSystem') },
     { value: 'zh-CN', label: t('general.localeChinese') },
+    { value: 'zh-TW', label: t('general.localeTraditionalChinese') },
     { value: 'en-US', label: t('general.localeEnglish') },
   ];
   const modeOptions: readonly SelectOption<typeof preferences.appearance.colorMode>[] = [
