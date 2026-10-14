@@ -6,12 +6,26 @@ This page describes the desktop and Android GitHub Actions pipelines. Windows an
 
 ## Workflows
 
-| Workflow      | File                                     | Trigger                                          | Result                                                                                                       |
-| ------------- | ---------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| CI            | `.github/workflows/ci.yml`               | pull requests, pushes to `main`, manual dispatch | quality gates plus unsigned package artifacts                                                                |
-| YAQMC release | `.github/workflows/electron-release.yml` | `v*` tags, manual dispatch                       | unsigned Windows/Linux and signed Android packages; stable tags publish a Release, other runs create a draft |
+| Workflow        | File                                      | Trigger                                          | Result                                                                                                       |
+| --------------- | ----------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| CI              | `.github/workflows/ci.yml`                | pull requests, pushes to `main`, manual dispatch | quality gates plus unsigned package artifacts                                                                |
+| Build artifacts | `.github/workflows/package-artifacts.yml` | manual dispatch only                             | unsigned Windows/Linux packages and an Android debug APK; Actions artifacts only                             |
+| YAQMC release   | `.github/workflows/electron-release.yml`  | `v*` tags, manual dispatch                       | unsigned Windows/Linux and signed Android packages; stable tags publish a Release, other runs create a draft |
 
 The removed legacy desktop workflow is not a supported build path. CI package artifacts are retained for 14 days.
+
+## Manual artifact builds
+
+After pushing a commit, open **Actions → Build artifacts → Run workflow**, select the branch and
+`all`, `windows`, `linux`, or `android`, then start the workflow. Download the packages from the
+completed run's **Artifacts** section; they are retained for 14 days. Pushes do not automatically
+run this dedicated workflow, and it never creates or publishes a GitHub Release.
+
+Desktop builds reuse the existing x64/arm64 matrix and package scripts. `ci` uses ThinLTO with
+eight codegen units; `production` uses Fat LTO with one codegen unit. Windows artifacts contain
+an installer and portable EXE; Linux artifacts contain AppImage, deb, rpm, and tar.gz packages.
+Android builds its separate renderer and a debug-signed test APK for arm64-v8a and x86_64 without
+requiring release signing secrets. A debug APK cannot replace an APK signed with another key.
 
 ## Gates and package matrix
 
