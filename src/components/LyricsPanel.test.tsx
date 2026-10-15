@@ -287,7 +287,9 @@ describe('LyricsPanel', () => {
     expect(container.querySelector('.lyrics-fullscreen-transport')).toBeNull();
 
     act(() =>
-      usePreferencesStore.getState().setTransportPreset('fullscreen', 'builtin.transport.fullscreen'),
+      usePreferencesStore
+        .getState()
+        .setTransportPreset('fullscreen', 'builtin.transport.fullscreen'),
     );
     expect(container.querySelector('.lyrics-fullscreen-transport')).toBeInTheDocument();
     expect(container.querySelectorAll('.lyrics-transport')).toHaveLength(1);
