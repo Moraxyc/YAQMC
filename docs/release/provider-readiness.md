@@ -1,6 +1,6 @@
 # Production provider readiness
 
-Status: **BLOCKED (EXACT-PIN SOAK NOT STARTED)** for the production `qmapi` backend at
+Status: **READY FOR 0.1.1 WITH A MAINTAINER-AUTHORIZED SOAK WAIVER** for the production `qmapi` backend at
 exact `qm-api-rs` revision
 `75f6e4d392f6d3e64608fb48e2480fb0087009e3`.
 
@@ -41,6 +41,18 @@ document.
 The original cutover remains authorized; its non-soak gates describe the historical
 cutover, not a new LIVE run for this pin. Local synthetic tests do not establish
 production-account, Android-device, or soak acceptance. The new exact-pin three-day
-soak has not started, and no new waiver or release has been requested. Consequently
-`npm run provider:enforce` must exit nonzero until new evidence is recorded. A normal
-code push must not turn this record into READY.
+soak has not started. Its status is not recorded as a test pass.
+
+## 0.1.1 release authorization
+
+On 2026-10-15, maintainer Mai-xiyu requested publication of v0.1.1. After being
+informed that the exact-pin three-day soak had not started and explicitly asked
+whether to waive it for 0.1.1, the maintainer reiterated: “发布v0.1.1 release啊”.
+This instruction authorizes the recorded `maintainer-authorized-skip` for
+version 0.1.1 and pin `75f6e4d392f6d3e64608fb48e2480fb0087009e3` only.
+The checker blocks reuse of this waiver at another version or dependency pin.
+All other provider and provenance gates remain enforced. This is release
+authorization, not evidence of a completed soak or fresh LIVE acceptance.
+
+Android update support remains incomplete; the maintainer excluded Android from
+this release. Only Windows and Linux desktop packages are published.

@@ -45,6 +45,7 @@ export const ELECTRON_RELEASE_NOTES = `# YAQMC 桌面版 / Desktop release
 - 修复 F11 全屏歌词操作栏背景与控件颜色。
 - 在设置中选择全屏歌词操作栏，支持封面下方的无背景样式，并独立保存。
 - 修复 Windows 便携版重复启动后设置页等页面无法加载的问题。
+- 当前依赖固定版本的三天稳定性测试尚未完成，本次由维护者授权仅对 0.1.1 豁免。
 
 提供 Windows 与 Linux 的 x64、arm64 安装包。请按操作系统与处理器架构选择附件。
 
@@ -70,6 +71,7 @@ Windows 更新通道不提供发布者签名验证。Linux 产物也未进行代
 - Fix F11 lyrics control backgrounds and colors.
 - Choose and persist the fullscreen lyrics controls in Settings, including controls below the cover without a background card.
 - Fix Windows portable relaunches deleting resources needed by the running instance.
+- The exact dependency pin has not completed its three-day soak; the maintainer authorized a waiver for 0.1.1 only.
 
 Windows and Linux packages are available for x64 and arm64. Choose the asset for your OS and architecture.
 

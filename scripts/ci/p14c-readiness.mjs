@@ -190,6 +190,22 @@ export function validateP14cRecord(record, options = {}) {
     else blockers[existingIndex] = mismatch;
   }
 
+  if (exactPinSoakGate.status === 'waived' && exactPinSoakGate.waivedForVersion) {
+    const version =
+      options.version ?? JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+    if (version !== exactPinSoakGate.waivedForVersion) {
+      const mismatch = {
+        ...exactPinSoakGate,
+        status: 'blocked',
+        blocker: 'release-version-mismatch',
+        reason: `waiver applies to version ${exactPinSoakGate.waivedForVersion}, not ${version}`,
+      };
+      const existingIndex = blockers.findIndex((gate) => gate.id === exactPinSoakGateId);
+      if (existingIndex === -1) blockers.push(mismatch);
+      else blockers[existingIndex] = mismatch;
+    }
+  }
+
   const reviewingAPostCutoverPin =
     record.cutoverAuthorized && record.targetPin !== record.cutoverBaselinePin;
   const historicalCutoverBlockers = reviewingAPostCutoverPin
