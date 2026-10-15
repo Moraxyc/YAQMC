@@ -470,6 +470,23 @@ describe('SettingsPage account section', () => {
     expect(wordJump).not.toBeChecked();
   });
 
+  it('selects the card-free fullscreen controls independently and preserves them through hydration', () => {
+    const { unmount } = renderSettings(accountProvider().value);
+    fireEvent.click(screen.getByRole('combobox', { name: 'Fullscreen lyrics bar' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Below cover (no card)' }));
+    const saved = usePreferencesStore.getState().transport;
+    expect(saved).toEqual({
+      ...defaultPreferences.transport,
+      fullscreen: 'builtin.transport.window',
+    });
+    unmount();
+    usePreferencesStore.getState().hydrate({ ...defaultPreferences, transport: saved });
+    renderSettings(accountProvider().value);
+    expect(screen.getByRole('combobox', { name: 'Fullscreen lyrics bar' })).toHaveTextContent(
+      'Below cover (no card)',
+    );
+  });
+
   it('offers a persistent Traditional Chinese interface choice independent of lyrics', () => {
     renderSettings(accountProvider().value);
     fireEvent.click(screen.getByRole('combobox', { name: 'Application language' }));

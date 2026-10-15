@@ -5,8 +5,7 @@ import { fileURLToPath } from 'node:url';
 /**
  * Electron package matrix (CI-02). This is the sole desktop package matrix.
  * Drops Windows i686 (R-13). Windows arm64 is a cross-compile on windows-2025.
- * Linux arm64 stays on the FACT ubuntu-22.04-arm runner (CI-03's ubuntu-24.04-arm
- * remains hardware pending).
+ * Linux arm64 uses Ubuntu 24.04: the 22.04 linker rejects Rust's AArch64 PLT32 relocations.
  */
 export const ELECTRON_PACKAGE_TARGETS = [
   {
@@ -36,7 +35,7 @@ export const ELECTRON_PACKAGE_TARGETS = [
   {
     os: 'linux',
     arch: 'arm64',
-    runner: 'ubuntu-22.04-arm',
+    runner: 'ubuntu-24.04-arm',
     target: 'aarch64-unknown-linux-gnu',
     cross: false,
     smoke: false,

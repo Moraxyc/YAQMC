@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -55,6 +55,7 @@ test('adds a revision-bound Android APK and unified notes to assembled release a
     sourceDir: android,
     destDir: assembled,
     expectedCommit: commit,
+    expectedVersion: '0.1.0',
   });
 
   assert.equal(result.apkName, 'YAQMC-android-arm64-v8a-v0.1.0.apk');
@@ -76,6 +77,7 @@ test('rejects Android assets with a mismatched commit or checksum', () => {
         sourceDir: mismatch.android,
         destDir: mismatch.assembled,
         expectedCommit: 'b'.repeat(40),
+        expectedVersion: '0.1.0',
       }),
     /build identity does not match/u,
   );
@@ -88,6 +90,7 @@ test('rejects Android assets with a mismatched commit or checksum', () => {
         sourceDir: tampered.android,
         destDir: tampered.assembled,
         expectedCommit: tampered.commit,
+        expectedVersion: '0.1.0',
       }),
     /checksum does not match/u,
   );
@@ -101,8 +104,48 @@ test('rejects Android assets staged for a different project version', () => {
         sourceDir: mismatch.android,
         destDir: mismatch.assembled,
         expectedCommit: mismatch.commit,
-        expectedVersion: '0.1.1',
+        expectedVersion: '0.1.2',
       }),
     /build identity does not match/u,
+  );
+});
+
+test('0.1.1 assembles desktop notes without Android files and records the reason', () => {
+  const { assembled, commit } = fixture();
+  const result = addAndroidReleaseAssets({
+    destDir: assembled,
+    expectedCommit: commit,
+    expectedVersion: '0.1.1',
+  });
+  assert.equal(result.skipped, true);
+  const notes = readFileSync(path.join(assembled, RELEASE_NOTES_NAME), 'utf8');
+  assert.match(notes, /Android 更新尚未完善，本次暂不发布 Android 版。/u);
+  assert.match(notes, /### 0.1.1 更新/u);
+  assert.equal(
+    readdirSync(assembled).some((name) => /\.apk$|ANDROID|android\.txt/u.test(name)),
+    false,
+  );
+});
+
+test('Android omission is scoped to 0.1.1 and rejects accidentally supplied APKs', () => {
+  const { android, assembled, commit } = fixture();
+  assert.throws(
+    () =>
+      addAndroidReleaseAssets({
+        sourceDir: android,
+        destDir: assembled,
+        expectedCommit: commit,
+        expectedVersion: '0.1.1',
+      }),
+    /excluded/u,
+  );
+  assert.throws(
+    () =>
+      addAndroidReleaseAssets({
+        destDir: assembled,
+        expectedCommit: commit,
+        expectedVersion: '0.1.2',
+      }),
+    /source is missing/u,
   );
 });

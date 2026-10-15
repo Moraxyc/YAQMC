@@ -34,12 +34,15 @@ jobs:
     name: Provider pin and provenance release gates
     runs-on: ubuntu-latest
     environment: release-signing
+    outputs:
+      include_android: ${{ steps.preflight.outputs.include_android }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 26.7.0
       - name: Validate release version and signing prerequisites
+        id: preflight
         env:
           YAQMC_TARGETS: ${{ inputs.targets || 'all' }}
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
@@ -55,6 +58,7 @@ jobs:
   android-package:
     name: Android release package (arm64-v8a)
     needs: [release-gates]
+    if: needs.release-gates.outputs.include_android == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: release-signing
@@ -282,7 +286,11 @@ jobs:
 
   assemble:
     name: Assemble release assets
-    needs: [electron-package, android-package]
+    needs: [release-gates, electron-package, android-package]
+    if: >-
+      ${{ always() && needs.release-gates.result == 'success' &&
+          needs.electron-package.result == 'success' &&
+          (needs.android-package.result == 'success' || needs.android-package.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -315,18 +323,26 @@ jobs:
           path: packed
           merge-multiple: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: needs.release-gates.outputs.include_android == 'true'
         with:
           name: YAQMC-android-arm64-v8a-${{ github.sha }}
           path: packed-android
       - name: Validate and flatten release assets
-        run: >-
-          node scripts/ci/assemble-release.mjs
-          --electron-from packed
-          --android-from packed-android
-          --source-from corresponding-source
-          --to assembled
-          --commit ${{ github.sha }}
-          --targets ${{ inputs.targets || 'all' }}
+        env:
+          INCLUDE_ANDROID: ${{ needs.release-gates.outputs.include_android }}
+        run: |
+          set -euo pipefail
+          android_args=()
+          if [ "$INCLUDE_ANDROID" = "true" ]; then
+            android_args+=(--android-from packed-android)
+          fi
+          node scripts/ci/assemble-release.mjs \
+            --electron-from packed \
+            --source-from corresponding-source \
+            --to assembled \
+            --commit ${{ github.sha }} \
+            --targets ${{ inputs.targets || 'all' }} \
+            "${android_args[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: YAQMC-release-draft-${{ github.sha }}

@@ -732,9 +732,9 @@ export const zhCN = {
       transportWindowDescription: '为窗口歌词选择封面下方的紧凑操作栏或底部悬浮操作栏。',
       transportFullscreen: '全屏歌词操作栏',
       transportFullscreenDescription:
-        '全屏可以独立选择任一种样式。窄屏下操作栏随页面布局排列，避免遮挡歌词。',
-      transportBuiltinWindow: '内置紧凑样式',
-      transportBuiltinFullscreen: '内置沉浸样式',
+        '选择“封面下方”可使用与非全屏相同的无背景操作栏，全屏样式会独立保存。',
+      transportBuiltinWindow: '封面下方（无背景）',
+      transportBuiltinFullscreen: '底部悬浮卡片',
       transportFromPlugin: '插件样式（{{plugin}}）',
     },
     lyricsPresets: {

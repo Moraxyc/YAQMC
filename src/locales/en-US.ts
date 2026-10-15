@@ -742,9 +742,9 @@ export const enUS = {
         'Choose the controls below the cover or the floating bar for windowed lyrics.',
       transportFullscreen: 'Fullscreen lyrics bar',
       transportFullscreenDescription:
-        'Choose either style independently for fullscreen lyrics. Narrow screens keep controls in the page layout.',
-      transportBuiltinWindow: 'Built-in compact style',
-      transportBuiltinFullscreen: 'Built-in immersive style',
+        'Choose “Below cover” for the same card-free controls as windowed lyrics. The selection is saved independently for fullscreen lyrics.',
+      transportBuiltinWindow: 'Below cover (no card)',
+      transportBuiltinFullscreen: 'Floating bottom card',
       transportFromPlugin: 'Plugin style ({{plugin}})',
     },
     lyricsPresets: {

@@ -39,7 +39,7 @@ and provenance; and scans for secrets on Linux and Windows. Cargo fetches the ex
 - Pull requests package Windows x64 and Linux x64.
 - Pushes to `main` package Windows x64/arm64 and Linux x64/arm64.
 - Manual runs select `windows`, `linux`, or `all`, and `ci` or `production` optimization.
-- Windows arm64 is cross-compiled on `windows-2025`. Linux arm64 uses `ubuntu-22.04-arm`.
+- Windows arm64 is cross-compiled on `windows-2025`. Linux arm64 uses `ubuntu-24.04-arm`.
 - Windows i686 is not built or published.
 
 Superseded pull-request runs are cancelled. Pushes to `main`, tag builds, and manual packaging runs are not cancelled mid-flight.
@@ -131,6 +131,10 @@ release history automatically.
 The packaged renderer uses the AGPL-licensed AMLL packages. Assembly verifies their exact package version,
 license, revision, source entry points, archive hash, and the requirements in
 [the corresponding-source policy](../CORRESPONDING_SOURCE_POLICY.md).
+
+## 0.1.1 desktop-only publication
+
+Version 0.1.1 skips Android packaging, APK assembly, and Android signing-secret checks because Android update support is not yet complete. The omission is scoped to this exact version; other versions retain the Android release requirements. Windows and Linux x64/arm64 artifacts and all provider/provenance gates remain required.
 
 ## Build-accepted versus runtime-tested
 

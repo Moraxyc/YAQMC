@@ -45,9 +45,9 @@ test('Windows arm64 is a cross-compile on windows-2025, not windows-11-arm', () 
   assert.equal(arm.smoke, false);
 });
 
-test('Linux arm64 uses the FACT ubuntu-22.04-arm runner', () => {
+test('Linux arm64 uses Ubuntu 24.04 for modern AArch64 relocations', () => {
   const arm = ELECTRON_PACKAGE_TARGETS.find((row) => row.os === 'linux' && row.arch === 'arm64');
-  assert.equal(arm.runner, 'ubuntu-22.04-arm');
+  assert.equal(arm.runner, 'ubuntu-24.04-arm');
   assert.equal(arm.target, 'aarch64-unknown-linux-gnu');
   assert.equal(arm.cross, false);
 });

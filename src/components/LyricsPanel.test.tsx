@@ -254,6 +254,46 @@ describe('LyricsPanel', () => {
     expect(container.querySelector('.lyrics-stage__context-artwork img')).toBeNull();
   });
 
+  it('switches fullscreen controls below the cover and restores the floating card without changing windowed preferences', () => {
+    const windowPreset = 'builtin.transport.fullscreen';
+    usePreferencesStore.setState({
+      transport: { ...defaultPreferences.transport, window: windowPreset },
+    });
+    const { container, rerender } = render(<LyricsPanel {...props({ fullscreen: true })} />);
+    expect(container.querySelector('.lyrics-fullscreen-transport')).toBeInTheDocument();
+
+    act(() =>
+      usePreferencesStore.getState().setTransportPreset('fullscreen', 'builtin.transport.window'),
+    );
+    expect(usePreferencesStore.getState().transport).toMatchObject({
+      window: windowPreset,
+      fullscreen: 'builtin.transport.window',
+    });
+    expect(container.querySelector('.lyrics-fullscreen-transport')).toBeNull();
+    expect(container.querySelector('.lyrics-scene__transport .lyrics-transport')).toHaveAttribute(
+      'data-surface',
+      'fullscreen',
+    );
+    expect(container.querySelectorAll('.lyrics-transport')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+
+    rerender(<LyricsPanel {...props()} />);
+    expect(container.querySelector('.lyrics-transport')).toHaveAttribute(
+      'data-transport-preset',
+      windowPreset,
+    );
+    rerender(<LyricsPanel {...props({ fullscreen: true })} />);
+    expect(container.querySelector('.lyrics-fullscreen-transport')).toBeNull();
+
+    act(() =>
+      usePreferencesStore.getState().setTransportPreset('fullscreen', 'builtin.transport.fullscreen'),
+    );
+    expect(container.querySelector('.lyrics-fullscreen-transport')).toBeInTheDocument();
+    expect(container.querySelectorAll('.lyrics-transport')).toHaveLength(1);
+    expect(usePreferencesStore.getState().transport.window).toBe(windowPreset);
+  });
+
   it('renders the configured window and fullscreen transport bars around one renderer', () => {
     const { container, rerender } = render(<LyricsPanel {...props()} />);
     const windowBar = container.querySelector<HTMLElement>('.lyrics-transport');

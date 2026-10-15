@@ -730,9 +730,9 @@ export const zhTW = {
       transportWindowDescription: '為視窗歌詞選擇封面下方的緊湊操作欄或底部懸浮操作欄。',
       transportFullscreen: '全屏歌詞操作欄',
       transportFullscreenDescription:
-        '全屏可以獨立選擇任一種樣式。窄屏下操作欄隨頁面佈局排列，避免遮擋歌詞。',
-      transportBuiltinWindow: '內建緊湊樣式',
-      transportBuiltinFullscreen: '內建沉浸樣式',
+        '選擇「封面下方」即可使用與非全螢幕相同的無背景操作欄；全螢幕樣式會獨立儲存。',
+      transportBuiltinWindow: '封面下方（無背景）',
+      transportBuiltinFullscreen: '底部懸浮卡片',
       transportFromPlugin: '外掛樣式（{{plugin}}）',
     },
     lyricsPresets: {

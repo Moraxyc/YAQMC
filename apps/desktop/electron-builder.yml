@@ -72,6 +72,9 @@ nsis:
   allowToChangeInstallationDirectory: true
   artifactName: YAQMC-windows-${arch}-setup.${ext}
 portable:
+  # electron-builder 26.15.7: true omits UNPACK_DIR_NAME, using a unique NSIS
+  # $PLUGINSDIR per launch so a second launch cannot remove the running app.
+  unpackDirName: true
   artifactName: YAQMC-windows-${arch}-portable.${ext}
 linux:
   icon: resources
