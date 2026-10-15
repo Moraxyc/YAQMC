@@ -32,7 +32,7 @@ Linux 产物包含 AppImage、deb、rpm、tar.gz。Android 单独构建自己的
 - Pull request 打包 Windows x64 与 Linux x64。
 - 推送 `main` 打包 Windows x64/arm64 与 Linux x64/arm64。
 - 手动运行可选 `windows`、`linux` 或 `all`，以及 `ci` 或 `production` 优化配置。
-- Windows arm64 在 `windows-2025` 交叉编译；Linux arm64 使用 `ubuntu-24.04-arm`。
+- Windows arm64 在 `windows-2025` 交叉编译；Linux arm64 使用 `ubuntu-22.04-arm`。
 - 不再构建或发布 Windows i686。
 
 过时的 pull request 运行会被取消；推送 `main`、tag 和手动打包不会中途取消。
@@ -118,7 +118,3 @@ npm run provider:enforce
 npm run provenance:enforce
 npm run package -w @yaqmc/desktop -- --publish never
 ```
-
-## 0.1.1 暂不发布 Android
-
-Android 更新尚未完善，因此 0.1.1 跳过 Android 打包、APK 汇总和 Android 签名密钥检查。此例外仅适用于 0.1.1；其他版本继续执行 Android 发布要求。Windows/Linux x64、arm64 产物与 Provider、来源审计门禁仍为必需。

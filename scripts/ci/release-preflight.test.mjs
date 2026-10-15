@@ -16,7 +16,6 @@ test('preflight requires Android secrets but allows unsigned Windows for a full 
     targets: 'all',
     version: '0.1.0',
     tagged: false,
-    includeAndroid: true,
   });
   for (const name of Object.keys(credentials)) {
     assert.throws(
@@ -65,20 +64,4 @@ test('release preflight gates heavy jobs and stable publication follows asset as
   assert.match(workflow, /node scripts\/ci\/release-preflight.mjs/u);
   assert.match(workflow, /gh release edit "\$tag" --draft=false --prerelease=false --latest/u);
   assert.match(workflow, /needs: \[assemble\]/u);
-});
-
-test('0.1.1 excludes Android without weakening tag or future signing checks', () => {
-  const tagged = { GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: 'v0.1.1' };
-  assert.deepEqual(releasePreflight(tagged, '0.1.1'), {
-    targets: 'all',
-    version: '0.1.1',
-    tagged: true,
-    includeAndroid: false,
-  });
-  assert.throws(() => releasePreflight(tagged, '0.1.2'), /canonical version/u);
-  assert.throws(
-    () => releasePreflight({ ...tagged, YAQMC_TARGETS: 'linux' }, '0.1.1'),
-    /every platform/u,
-  );
-  assert.throws(() => releasePreflight({}, '0.1.2'), /Missing release-signing secrets/u);
 });

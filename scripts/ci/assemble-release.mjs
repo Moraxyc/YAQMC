@@ -3,7 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { androidVersion, rootVersion } from './android-version.mjs';
-import { androidReleasePolicy } from './release-preflight.mjs';
 import { ELECTRON_RELEASE_NOTES, assembleElectronRelease } from './assemble-electron-release.mjs';
 import {
   ANDROID_APPLICATION_ID,
@@ -55,17 +54,7 @@ export function addAndroidReleaseAssets({
   if (!/^[0-9a-f]{40}$/u.test(expectedCommit ?? '')) {
     throw new Error('expected Android release commit must be a full lowercase Git SHA');
   }
-  const policy = androidReleasePolicy(expectedVersion);
-  if (!policy.enabled) {
-    if (sourceDir) throw new Error('Android assets are excluded from this release');
-    if (!existsSync(destDir)) throw new Error('assembled release destination is missing');
-    const notes = combinedReleaseNotes(
-      `# Android\n\n${policy.reason}\n\nAndroid is not included in this release because its update support is not yet complete.`,
-    );
-    writeFileSync(path.join(destDir, RELEASE_NOTES_NAME), notes, { flag: 'wx' });
-    return { skipped: true, reason: policy.reason };
-  }
-  if (!sourceDir || !existsSync(sourceDir)) {
+  if (!existsSync(sourceDir)) {
     throw new Error(`Android release source is missing: ${sourceDir}`);
   }
   if (!existsSync(destDir)) {
@@ -172,12 +161,12 @@ const invokedDirectly =
   Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
   const options = parseArgs(process.argv.slice(2));
-  for (const required of ['electron-from', 'source-from', 'to', 'commit']) {
+  for (const required of ['electron-from', 'android-from', 'source-from', 'to', 'commit']) {
     if (!options[required]) throw new Error(`assemble-release requires --${required}`);
   }
   const result = assembleRelease({
     electronSourceDir: path.resolve(options['electron-from']),
-    androidSourceDir: options['android-from'] ? path.resolve(options['android-from']) : undefined,
+    androidSourceDir: path.resolve(options['android-from']),
     correspondingSourceDir: path.resolve(options['source-from']),
     destDir: path.resolve(options.to),
     expectedCommit: options.commit,

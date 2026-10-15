@@ -32,12 +32,7 @@ function currentPinQualifiedRecord() {
 }
 
 test('the new production pin does not inherit a previous soak waiver', () => {
-  const record = currentRecord();
-  const reset = record.gates.find((gate) => gate.id === 'exact-pin-three-day-soak');
-  reset.status = 'not-started';
-  for (const field of ['waivedBy', 'waivedOn', 'waiverKind', 'waivedForVersion'])
-    delete reset[field];
-  const blockers = validateP14cRecord(record);
+  const { record, blockers } = inspectP14cReadiness();
   assert.equal(record.cutoverAuthorized, true);
   assert.equal(record.defaultBackend, 'qmapi');
   assert.deepEqual(record.responsibilities.pendingProductionReplacement, []);
@@ -53,15 +48,11 @@ test('the new production pin does not inherit a previous soak waiver', () => {
   assert.equal(soak.waiverKind, undefined);
 });
 
-test('the shipped record reports the version-scoped maintainer waiver', () => {
+test('the shipped record reports the unqualified pin as blocked', () => {
   const { record, blockers } = inspectP14cReadiness();
   const report = formatP14cStatus(record, blockers);
-  assert.match(report, /^PROVIDER READINESS STATUS: READY$/m);
-  assert.match(report, /exact-pin-three-day-soak: waived/);
-  assert.equal(
-    record.gates.find((gate) => gate.id === 'exact-pin-three-day-soak').waivedForVersion,
-    '0.1.1',
-  );
+  assert.match(report, /^PROVIDER READINESS STATUS: BLOCKED$/m);
+  assert.match(report, /exact-pin-three-day-soak: not-started/);
 });
 
 test('a waiver pinned to the cutover baseline blocks the current target pin', () => {
@@ -362,13 +353,5 @@ test('the legacy credential rollback slot remains explicit until cross-release r
         },
       }),
     /must retain legacy-session-migration-rollback-slot/,
-  );
-});
-
-test('the 0.1.1 soak waiver cannot authorize a later release', () => {
-  const blockers = validateP14cRecord(currentRecord(), { version: '0.1.2' });
-  assert.deepEqual(
-    blockers.map((gate) => gate.blocker),
-    ['release-version-mismatch'],
   );
 });
