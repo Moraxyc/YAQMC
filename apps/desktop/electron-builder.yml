@@ -22,6 +22,12 @@ directories:
 files:
   - dist/main/**
   - dist/preload/**
+  # The main process resolves the tray/window icon relative to the packaged
+  # app root (`resources/app.asar/resources`). buildResources is not included
+  # in the asar automatically, so keep the runtime icon assets explicit.
+  - resources/icon.ico
+  - resources/icon.png
+  - resources/icon.icns
   - '!dist/**/*.map'
 extraMetadata:
   main: dist/main/index.js
