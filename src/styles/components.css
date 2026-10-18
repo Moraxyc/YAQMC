@@ -1914,9 +1914,15 @@ input[type='range']:disabled {
   font-family: var(--font-display);
   font-size: inherit;
   font-weight: var(--lyrics-font-weight, 700);
+  font-synthesis: weight;
   line-height: var(--lyrics-line-height, 1.16);
   letter-spacing: -0.038em;
   mix-blend-mode: normal;
+}
+
+.lyrics-scene .lyrics-stage__amll .amll-lyric-player.dom * {
+  font-family: inherit;
+  font-weight: inherit;
 }
 
 .lyrics-stage__amll[data-align='left'] .amll-lyric-player {
@@ -1960,6 +1966,7 @@ input[type='range']:disabled {
   font-family: var(--font-display);
   font-size: var(--lyrics-font-size, inherit);
   font-weight: var(--lyrics-font-weight, 700);
+  font-synthesis: weight;
   letter-spacing: -0.038em;
   line-height: var(--lyrics-line-height, 1.16);
   text-align: inherit;

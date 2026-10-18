@@ -2,24 +2,30 @@
  * glyph metrics. The local() sources deliberately avoid bundling Apple fonts. */
 @font-face {
   font-family: 'YAQMC Text';
+  font-weight: 100 900;
+  font-stretch: 100%;
   src: local('SF Pro Text'), local('San Francisco');
   unicode-range: U+0000-02AF, U+1E00-1EFF, U+2000-214F;
 }
 
 @font-face {
   font-family: 'YAQMC Text';
+  font-weight: 100 900;
   src: local('PingFang SC');
   unicode-range: U+3000-303F, U+3040-30FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
 }
 
 @font-face {
   font-family: 'YAQMC Display';
+  font-weight: 100 900;
+  font-stretch: 100%;
   src: local('SF Pro Display'), local('San Francisco');
   unicode-range: U+0000-02AF, U+1E00-1EFF, U+2000-214F;
 }
 
 @font-face {
   font-family: 'YAQMC Display';
+  font-weight: 100 900;
   src: local('PingFang SC');
   unicode-range: U+3000-303F, U+3040-30FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
 }
@@ -27,12 +33,17 @@
 :root {
   color-scheme: dark;
   --ui-font-scale: 1;
+  font-stretch: 100%;
+  font-variation-settings: 'wdth' 100;
   --font-ui-text:
-    'YAQMC Text', 'PingFang SC', 'Segoe UI Variable', 'Segoe UI', 'Noto Sans SC', system-ui,
-    -apple-system, BlinkMacSystemFont, sans-serif;
+    'YAQMC Text', 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI Variable',
+    'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif;
   --font-ui-display:
-    'YAQMC Display', 'PingFang SC', 'SF Pro Display', 'Segoe UI Variable Display',
-    'Segoe UI Variable', 'Segoe UI', sans-serif;
+    'YAQMC Display', 'SF Pro Display', 'Segoe UI Variable Display',
+    'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont,
+    'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN',
+    'Microsoft YaHei', sans-serif;
   font-family: var(--font-ui-text);
   font-synthesis: none;
   text-rendering: optimizeLegibility;

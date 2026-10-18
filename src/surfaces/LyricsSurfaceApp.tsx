@@ -116,9 +116,9 @@ function fontFamily(settings: LyricSurfaceSettings): string {
   if (settings.fontMode === 'application') return 'var(--font-display)';
   if (settings.fontMode === 'custom' && settings.customFontFamily.trim()) {
     const family = settings.customFontFamily.replace(/["'\\;]/g, '').trim();
-    return `"${family}", "YAQMC Text", "PingFang SC", "Segoe UI Variable", "Noto Sans SC", sans-serif`;
+    return `"${family}", 'SF Pro Display', 'SF Pro', 'Segoe UI Variable Display', 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC', sans-serif`;
   }
-  return '"YAQMC Text", "PingFang SC", "Segoe UI Variable", "Segoe UI", "Noto Sans SC", system-ui, sans-serif';
+  return 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
 }
 
 function useSurfaceHover(interactive: boolean, rootRef: { current: HTMLElement | null }) {

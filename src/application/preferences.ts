@@ -851,14 +851,14 @@ export function applyAppearance(
   root.style.setProperty('--ui-font-scale', `${appearance.interfaceFontScale / 100}`);
   const fonts: Record<InterfaceFontFamily, { text: string; display: string }> = {
     application: {
-      text: "'YAQMC Text', 'PingFang SC', 'Segoe UI Variable', 'Segoe UI', 'Noto Sans SC', system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+      text: "'YAQMC Text', 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif",
       display:
-        "'YAQMC Display', 'PingFang SC', 'SF Pro Display', 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', sans-serif",
+        "'YAQMC Display', 'SF Pro Display', 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif",
     },
     system: {
-      text: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif",
+      text: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, 'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif",
       display:
-        "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif",
+        "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', system-ui, 'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif",
     },
     serif: {
       text: "ui-serif, 'Noto Serif CJK SC', 'Songti SC', Georgia, serif",
