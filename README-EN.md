@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="https://github.com/YAQMC/YAQMC/actions/workflows/ci.yml"><img src="https://github.com/YAQMC/YAQMC/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://aur.archlinux.org/packages/yaqmc-bin"><img src="https://img.shields.io/aur/version/yaqmc-bin?logo=archlinux&color=1793D1" alt="AUR version"></a>
   <img src="https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white" alt="Electron 43">
   <img src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white" alt="Android 8.0 or newer">
   <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111" alt="React 19">
@@ -56,13 +57,14 @@ the architecture and tested scope.
 
 Electron releases publish the package formats that each supported runner can build natively:
 
-| Platform | Architectures         | Packages                                                |
-| -------- | --------------------- | ------------------------------------------------------- |
-| Windows  | x64 / AMD64, ARM64    | NSIS `.exe`, portable `.exe`                            |
-| Linux    | x86_64 / AMD64, ARM64 | AppImage, Debian `.deb`, RPM `.rpm`, portable `.tar.gz` |
-| Android  | ARM64                 | signed `.apk`                                           |
+| Platform | Architectures         | Packages                                                                                 |
+| -------- | --------------------- | ---------------------------------------------------------------------------------------- |
+| Windows  | x64 / AMD64, ARM64    | NSIS `.exe`, portable `.exe`                                                             |
+| Linux    | x86_64 / AMD64, ARM64 | AppImage, Debian `.deb`, RPM `.rpm`, portable `.tar.gz`, AUR (`yaqmc-bin`, `yaqmc-git`) |
+| Android  | ARM64                 | signed `.apk`                                                                            |
 
 AMD64, x86_64, and the release label x64 name the same architecture. Windows i686/x86 packages are no longer published.
+Arch Linux users can install directly via AUR using [`yaqmc-bin`](https://aur.archlinux.org/packages/yaqmc-bin) (prebuilt binary, recommended) or [`yaqmc-git`](https://aur.archlinux.org/packages/yaqmc-git) (VCS package built from the latest main branch).
 Release artifacts include SHA-256 checksums. Linux runtime acceptance remains host-specific—especially on native
 Wayland. The x86_64 AppImage and the revision-bound `YAQMC-linux-x64-tester-<commit>` bundle are separate artifacts;
 only the tester bundle contains the diagnostics collector, verifier, and acceptance documents described in

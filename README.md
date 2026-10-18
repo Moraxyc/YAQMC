@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="https://github.com/YAQMC/YAQMC/actions/workflows/ci.yml"><img src="https://github.com/YAQMC/YAQMC/actions/workflows/ci.yml/badge.svg" alt="CI 状态"></a>
+  <a href="https://aur.archlinux.org/packages/yaqmc-bin"><img src="https://img.shields.io/aur/version/yaqmc-bin?logo=archlinux&color=1793D1" alt="AUR 版本"></a>
   <img src="https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white" alt="Electron 43">
   <img src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white" alt="Android 8.0 或更高版本">
   <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111" alt="React 19">
@@ -54,6 +55,14 @@ Linux 用户：
 - ARM64 电脑：选择 `linux-arm64`。
 - Debian、Ubuntu 可以使用 `.deb`；Fedora、openSUSE 等系统可以使用 `.rpm`。
 - AppImage 不需要安装，添加可执行权限后即可运行。
+- Arch Linux 用户可以直接通过 AUR 安装：
+  - [`yaqmc-bin`](https://aur.archlinux.org/packages/yaqmc-bin)：官方发布的预编译二进制包（推荐，安装迅速）
+  - [`yaqmc-git`](https://aur.archlinux.org/packages/yaqmc-git)：跟随主分支最新提交由源码自动构建
+  ```bash
+  paru -S yaqmc-bin
+  # 或
+  yay -S yaqmc-bin
+  ```
 
 Android 用户：
 
