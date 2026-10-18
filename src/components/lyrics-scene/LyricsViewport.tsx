@@ -11,6 +11,7 @@ import {
   hideNativeLyrics,
   onNativeLyricsSeek,
   showNativeLyrics,
+  updateNativeLyrics,
 } from '../../application/native-lyrics-bridge';
 import type {
   AmllSettings,
@@ -18,6 +19,7 @@ import type {
   SecondaryLyricVisibility,
 } from '../../application/preferences';
 import { isAndroidRuntime } from '../../application/host-capabilities';
+import { useLyricsStageStore } from '../../application/lyrics-stage-machine';
 import { usePlayerStore } from '../../application/player-store';
 import type { LyricDocument } from '../../domain/music';
 
@@ -213,6 +215,8 @@ export function LyricsViewport({
   const amllLines = useMemo(() => model?.lines.map(toAmllLyricLine) ?? [], [model]);
   const isAndroid = isAndroidRuntime();
   const nativeContainerRef = useRef<HTMLDivElement>(null);
+  const stage = useLyricsStageStore((s) => s.stage);
+  const nativeShownRef = useRef(false);
 
   useEffect(() => {
     if (!isAndroid || editorGesture) return;
@@ -222,23 +226,53 @@ export function LyricsViewport({
       !document ||
       document.syncMode === 'unsynchronized' ||
       !model ||
-      model.lines.length === 0
+      model.lines.length === 0 ||
+      stage !== 'open'
     ) {
+      nativeShownRef.current = false;
       void hideNativeLyrics();
       return;
     }
 
-    const updateNativeOverlay = () => {
+    const updateNativeOverlay = (initial: boolean) => {
       const el = nativeContainerRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
       const bounds = {
-        top: rect.top,
-        left: rect.left,
+        // The Android overlay is a sibling of the WebView. With the host in
+        // edge-to-edge mode, WebView CSS viewport coordinates map directly to
+        // the sibling parent's pixel origin after density conversion.
+        top: Math.max(0, rect.top),
+        left: Math.max(0, rect.left),
         width: rect.width,
         height: rect.height,
       };
-      void showNativeLyrics(bounds, model.lines, {
+      if (bounds.width <= 0 || bounds.height <= 0) return;
+
+      const scene = el.closest<HTMLElement>('.lyrics-scene');
+      const computed = window.getComputedStyle(el);
+      const sceneComputed = scene ? window.getComputedStyle(scene) : computed;
+      const fontSizePx = Number.parseFloat(computed.fontSize);
+      const fontWeight = Number.parseFloat(
+        sceneComputed.getPropertyValue('--lyrics-font-weight') || computed.fontWeight,
+      );
+      const foregroundToken = sceneComputed.getPropertyValue('--lyrics-foreground').trim();
+      // `color-mix()` is intentionally resolved by the browser when possible;
+      // older WebViews may leave the token untouched, in which case the host
+      // falls back to its own readable foreground color.
+      let foregroundColor = computed.color;
+      if (foregroundToken) {
+        const probe = window.document.createElement('span');
+        probe.style.position = 'absolute';
+        probe.style.visibility = 'hidden';
+        probe.style.pointerEvents = 'none';
+        probe.style.color = foregroundToken;
+        scene?.appendChild(probe);
+        const resolved = window.getComputedStyle(probe).color;
+        probe.remove();
+        if (resolved) foregroundColor = resolved;
+      }
+      const options = {
         align,
         followAnchor,
         enableSpring: amll.enableSpring && !reducedMotion,
@@ -246,10 +280,21 @@ export function LyricsViewport({
         enableBlur: amll.enableBlur && !reducedMotion,
         hidePassedLines: amll.hidePassedLines,
         wordFadeWidth: amll.wordFadeWidth,
-      });
+        ...(Number.isFinite(fontSizePx) && fontSizePx > 0 ? { lineFontSizePx: fontSizePx } : {}),
+        ...(Number.isFinite(fontWeight) && fontWeight > 0 ? { fontWeight } : {}),
+        ...(foregroundColor ? { foregroundColor } : {}),
+        timingOffsetMs: presentationOffsetMs - document.metadata.offsetMs,
+      };
+
+      if (initial || !nativeShownRef.current) {
+        nativeShownRef.current = true;
+        void showNativeLyrics(bounds, model.lines, options);
+      } else {
+        void updateNativeLyrics(bounds, null, options);
+      }
     };
 
-    updateNativeOverlay();
+    updateNativeOverlay(true);
 
     const unlisten = onNativeLyricsSeek((pos) => {
       if (allowSeek) {
@@ -259,18 +304,20 @@ export function LyricsViewport({
 
     let ro: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined' && nativeContainerRef.current) {
-      ro = new ResizeObserver(() => updateNativeOverlay());
+      ro = new ResizeObserver(() => updateNativeOverlay(false));
       ro.observe(nativeContainerRef.current);
     }
 
     return () => {
       ro?.disconnect();
       unlisten();
+      nativeShownRef.current = false;
       void hideNativeLyrics();
     };
   }, [
     isAndroid,
     editorGesture,
+    stage,
     status,
     document,
     model,

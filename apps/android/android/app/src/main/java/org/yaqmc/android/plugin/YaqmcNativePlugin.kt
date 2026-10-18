@@ -87,18 +87,22 @@ class YaqmcNativePlugin : Plugin(), CoreManager.Callback {
         deepLinkSubscription = DeepLinkInbox.subscribe(::publishDeepLink)
         checkForUpdates(call = null, automatic = true)
         bridge.executeOnMainThread {
-            val webView = bridge.webView
-            val container = webView.parent as? android.view.ViewGroup
-            if (container != null) {
-                val overlay = org.yaqmc.android.lyrics.NativeLyricsOverlay(activity, container)
-                overlay.onSeekListener = { pos ->
-                    bridge.executeOnMainThread {
-                        notifyListeners("lyricsSeek", JSObject().put("positionMs", pos))
-                    }
-                }
-                lyricsOverlay = overlay
+            getOrCreateLyricsOverlay()
+        }
+    }
+
+    private fun getOrCreateLyricsOverlay(): org.yaqmc.android.lyrics.NativeLyricsOverlay? {
+        lyricsOverlay?.let { return it }
+        val webView = bridge.webView ?: return null
+        val container = webView.parent as? android.view.ViewGroup ?: return null
+        val overlay = org.yaqmc.android.lyrics.NativeLyricsOverlay(activity, container)
+        overlay.onSeekListener = { pos ->
+            bridge.executeOnMainThread {
+                notifyListeners("lyricsSeek", JSObject().put("positionMs", pos))
             }
         }
+        lyricsOverlay = overlay
+        return overlay
     }
 
     override fun handleOnDestroy() {
@@ -130,7 +134,7 @@ class YaqmcNativePlugin : Plugin(), CoreManager.Callback {
                     val bounds = params.optJSONObject("bounds")
                     val lines = params.optJSONArray("lines")
                     val options = params.optJSONObject("options")
-                    lyricsOverlay?.show(bounds, lines, options)
+                    getOrCreateLyricsOverlay()?.show(bounds, lines, options)
                     call.resolve(JSObject().put("value", true))
                 }
             }
@@ -139,7 +143,7 @@ class YaqmcNativePlugin : Plugin(), CoreManager.Callback {
                     val bounds = params.optJSONObject("bounds")
                     val lines = params.optJSONArray("lines")
                     val options = params.optJSONObject("options")
-                    lyricsOverlay?.update(bounds, lines, options)
+                    getOrCreateLyricsOverlay()?.update(bounds, lines, options)
                     call.resolve(JSObject().put("value", true))
                 }
             }

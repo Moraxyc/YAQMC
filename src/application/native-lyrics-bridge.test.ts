@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { hideNativeLyrics, onNativeLyricsSeek, showNativeLyrics } from './native-lyrics-bridge';
+import {
+  hideNativeLyrics,
+  onNativeLyricsSeek,
+  showNativeLyrics,
+  updateNativeLyrics,
+} from './native-lyrics-bridge';
 import type { RenderLyricLine } from './lyrics-render-model';
 
 describe('native-lyrics-bridge', () => {
@@ -88,6 +93,44 @@ describe('native-lyrics-bridge', () => {
     });
   });
 
+  it('updates native geometry and style without resending lyric lines', async () => {
+    const invokeMock = vi.fn().mockResolvedValue({ value: true });
+    (globalThis as unknown as { Capacitor?: unknown }).Capacitor = {
+      Plugins: {
+        YaqmcNative: {
+          invoke: invokeMock,
+          addListener: vi.fn(),
+        },
+      },
+    };
+
+    await updateNativeLyrics({ top: 2, left: 4, width: 120, height: 80 }, null, {
+      align: 'center',
+      followAnchor: 0.35,
+      enableSpring: true,
+      enableScale: true,
+      enableBlur: true,
+      hidePassedLines: false,
+      wordFadeWidth: 1,
+      lineFontSizePx: 24,
+      fontWeight: 650,
+      foregroundColor: 'rgb(240, 240, 240)',
+      timingOffsetMs: -120,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith({
+      method: 'lyrics_update',
+      params: {
+        bounds: { top: 2, left: 4, width: 120, height: 80 },
+        options: expect.objectContaining({
+          lineFontSizePx: 24,
+          fontWeight: 650,
+          timingOffsetMs: -120,
+        }),
+      },
+    });
+  });
+
   it('listens for lyricsSeek events and cleans up listener on unsubscribe', async () => {
     let capturedListener: ((payload: Record<string, unknown>) => void) | null = null;
     const removeMock = vi.fn().mockResolvedValue(undefined);
@@ -117,6 +160,36 @@ describe('native-lyrics-bridge', () => {
     unsubscribe();
     // Flush microtasks for the promise chain
     await Promise.resolve();
+    expect(removeMock).toHaveBeenCalled();
+  });
+
+  it('handles synchronous listener handle return from native bridge', () => {
+    let capturedListener: ((payload: Record<string, unknown>) => void) | null = null;
+    const removeMock = vi.fn();
+    const addListenerMock = vi.fn().mockImplementation((_event, listener) => {
+      capturedListener = listener;
+      return { remove: removeMock };
+    });
+
+    (globalThis as unknown as { Capacitor?: unknown }).Capacitor = {
+      Plugins: {
+        YaqmcNative: {
+          invoke: vi.fn(),
+          addListener: addListenerMock,
+        },
+      },
+    };
+
+    const seekCallback = vi.fn();
+    const unsubscribe = onNativeLyricsSeek(seekCallback);
+
+    expect(addListenerMock).toHaveBeenCalledWith('lyricsSeek', expect.any(Function));
+
+    const listenerFn = capturedListener as ((payload: Record<string, unknown>) => void) | null;
+    listenerFn?.({ positionMs: 54321 });
+    expect(seekCallback).toHaveBeenCalledWith(54321);
+
+    unsubscribe();
     expect(removeMock).toHaveBeenCalled();
   });
 });

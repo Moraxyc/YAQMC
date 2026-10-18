@@ -15,6 +15,18 @@ export interface NativeLyricsOptions {
   enableBlur: boolean;
   hidePassedLines: boolean;
   wordFadeWidth: number;
+  /** CSS pixels from the scene widget; the native host converts this to sp. */
+  lineFontSizePx?: number;
+  /** CSS font weight from the active scene preset. */
+  fontWeight?: number;
+  /** Resolved scene foreground color (normally an rgb()/rgba() string). */
+  foregroundColor?: string;
+  /** Difference between the lyric timeline and the audio clock, in milliseconds. */
+  timingOffsetMs?: number;
+}
+
+interface NativeListenerHandle {
+  remove: () => Promise<void> | void;
 }
 
 interface CapacitorYaqmcNativePlugin {
@@ -22,7 +34,7 @@ interface CapacitorYaqmcNativePlugin {
   addListener(
     event: string,
     listener: (payload: Record<string, unknown>) => void,
-  ): Promise<{ remove: () => Promise<void> }>;
+  ): Promise<NativeListenerHandle> | NativeListenerHandle;
 }
 
 interface GlobalWithCapacitor {
@@ -52,6 +64,19 @@ export async function showNativeLyrics(
   });
 }
 
+export async function updateNativeLyrics(
+  bounds: NativeLyricsBounds | null,
+  lines: RenderLyricLine[] | null,
+  options: NativeLyricsOptions,
+): Promise<void> {
+  const plugin = getCapacitorPlugin();
+  if (!plugin) return;
+  await plugin.invoke({
+    method: 'lyrics_update',
+    params: { bounds, ...(lines ? { lines } : {}), options },
+  });
+}
+
 export async function hideNativeLyrics(): Promise<void> {
   const plugin = getCapacitorPlugin();
   if (!plugin) return;
@@ -64,25 +89,41 @@ export function onNativeLyricsSeek(callback: (positionMs: number) => void): () =
   const plugin = getCapacitorPlugin();
   if (!plugin) return () => {};
   let removed = false;
-  let handle: { remove: () => Promise<void> } | null = null;
+  let handle: { remove: () => Promise<void> | void } | null = null;
 
-  void plugin
-    .addListener('lyricsSeek', (event) => {
+  try {
+    const result = plugin.addListener('lyricsSeek', (event) => {
       const pos = event.positionMs;
       if (typeof pos === 'number') {
         callback(pos);
       }
-    })
-    .then((h) => {
-      if (removed) {
-        void h.remove();
-      } else {
-        handle = h;
-      }
     });
+
+    if (result && 'then' in result && typeof result.then === 'function') {
+      void result.then((h) => {
+        if (removed) {
+          void h?.remove();
+        } else {
+          handle = h;
+        }
+      });
+    } else if (result && 'remove' in result && typeof result.remove === 'function') {
+      if (removed) {
+        void result.remove();
+      } else {
+        handle = result;
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to attach lyricsSeek listener', error);
+  }
 
   return () => {
     removed = true;
-    void handle?.remove();
+    try {
+      void handle?.remove();
+    } catch {
+      // ignore cleanup errors
+    }
   };
 }
