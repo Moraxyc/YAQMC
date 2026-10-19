@@ -686,6 +686,11 @@ const METHODS: &[MethodSpec] = &[
     spec("app_settings_set", MethodOwner::Core, OriginClass::Main),
     spec("app_settings_remove", MethodOwner::Core, OriginClass::Main),
     spec(
+        "app_preferences_set_surface_interaction",
+        MethodOwner::Core,
+        OriginClass::Host,
+    ),
+    spec(
         "diagnostics_export_bundle_to",
         MethodOwner::Core,
         OriginClass::MainRenderer,
@@ -720,6 +725,7 @@ pub const PROTOCOL_ONLY_METHODS: &[&str] = &[
     "app_settings_get",
     "app_settings_set",
     "app_settings_remove",
+    "app_preferences_set_surface_interaction",
     "diagnostics_export_bundle_to",
     "statistics_export_to",
     "preferences_set_background_from",

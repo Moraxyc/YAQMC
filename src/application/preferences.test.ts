@@ -424,3 +424,18 @@ describe('formatBackgroundPickerError', () => {
     expect(formatBackgroundPickerError(new Error(''), 'fallback')).toBe('fallback');
   });
 });
+
+it('updates the startup cache when a host interaction event unlocks a surface', () => {
+  usePreferencesStore.getState().hydrate(
+    normalizePreferences({
+      version: 2,
+      surfaces: {
+        island: { enabled: true, interaction: 'passive-locked' },
+      },
+    }),
+  );
+  usePreferencesStore.getState().setSurfaceInteractionLocal('island', 'interactive');
+  const cached = JSON.parse(window.localStorage.getItem('yaqmc.preferences.v2')!);
+  expect(cached.surfaces.island.interaction).toBe('interactive');
+  expect(cached.surfaces.island.enabled).toBe(true);
+});

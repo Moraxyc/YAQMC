@@ -10,7 +10,6 @@ import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.media3.common.util.UnstableApi
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import dev.yaqmc.amll.model.LyricLine
 import dev.yaqmc.amll.model.LyricRuby
@@ -231,12 +230,6 @@ class NativeLyricsOverlay(
             options.optString("foregroundColor", ""),
             view.style.activeColor,
         )
-        val textAlign = when (options.optString("align", "center")) {
-            "left" -> TextAlign.Start
-            "right" -> TextAlign.End
-            else -> TextAlign.Center
-        }
-
         view.style = (view.style).copy(
             alignAnchor = alignAnchor,
             alignPosition = alignPos,
@@ -249,7 +242,6 @@ class NativeLyricsOverlay(
             secondaryFontSize = lineFontSizePx?.toFloat()?.times(0.5f)?.sp
                 ?: view.style.secondaryFontSize,
             lyricFontWeight = FontWeight(fontWeight),
-            textAlign = textAlign,
             activeColor = foreground,
             inactiveColor = foreground.copy(alpha = foreground.alpha * 0.40f),
             secondaryActiveColor = foreground.copy(alpha = foreground.alpha * 0.30f),

@@ -458,6 +458,11 @@ export function createLyricsSurfaces(deps: LyricsSurfaceDeps): LyricsSurfaces {
       return;
     }
     applyBounds(window, resolvedGeometry(kind, saved));
+    // Linux window geometry/frame updates can reset the native input region.
+    // Use the current lock state, including unlocks while settings were loading.
+    if (locked.has(kind)) {
+      lockLyricsSurface(window, kind, true);
+    }
     emitBounds(kind, window);
   }
 

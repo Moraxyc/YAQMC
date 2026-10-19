@@ -60,11 +60,13 @@ this small control accepts input. Its sandboxed preload and window-role IPC ACL 
 per-surface **Unlock** and **Unlock all** actions,
 and the tray keeps the global recovery action.
 
-Interaction changes use one serialized command that updates the native window policy and the canonical persisted
-preference together. The UI rolls back if that command fails, and ordinary preference writes preserve the
+Interaction changes are serialized in Electron Main. The host-only Core command
+`app_preferences_set_surface_interaction` atomically stores the requested interaction and returns the actual persisted
+preference document before Main applies the native window policy. The UI rolls back if that command fails, and ordinary preference writes preserve the
 canonical interaction fields, so a delayed event from another renderer cannot re-lock a surface that was just
-unlocked. Track, line, word, artwork, pause, and resume events only update renderer state and never focus or
-recreate a surface.
+unlocked. Host interaction events also update the startup cache. When restoring a cached locked surface, Main
+persists that state before showing the window, repairing older installs whose cache and database disagree.
+Track, line, word, artwork, pause, and resume events only update renderer state and never focus or recreate a surface.
 
 Windows currently satisfies the no-activate contract through Electron `BrowserWindow` focusability and cursor-event APIs; no
 custom window procedure, system hook, Explorer injection, or shell modification is installed. The auxiliary
@@ -100,7 +102,9 @@ transiently make it focusable. Linux returns an unknown fullscreen state rather 
 
 Position and size are saved in SQLite after a 350 ms debounce. Physical coordinates may be negative. A saved
 window must overlap a current monitor work area by at least 80×40 pixels; otherwise a safe default is calculated.
-Locking does not move a window. Settings exposes an explicit position reset for each remaining surface.
+After asynchronous geometry restoration, Main reapplies the passive input policy if the surface is still locked;
+unlocking during restoration does not re-lock it. Locking does not move a window. Settings exposes an explicit
+position reset for each remaining surface.
 
 ## Removed taskbar-adjacent overlay
 

@@ -770,3 +770,36 @@ fn dispatch_rejects_oversize_method_payloads_without_raising_the_hard_cap() {
         assert_eq!(core_error.code, ErrorCode::Protocol.as_str());
     });
 }
+
+#[test]
+fn host_surface_interaction_persists_across_generic_writes_and_reload() {
+    let (_root, runtime, core, host) = boot();
+    runtime.block_on(async {
+        let initial = json!({"version":2,"locale":"zh-CN","surfaces":{
+            "island":{"enabled":true,"interaction":"interactive"},
+            "desktop":{"enabled":false,"interaction":"interactive"}
+        }}).to_string();
+        dispatch(&core, &host, WindowOrigin::Main, "app_preferences_set",
+            Some(json!({"value":initial}))).await.unwrap();
+        for interaction in ["passive-locked", "interactive"] {
+            let result = dispatch(&core, &host, WindowOrigin::Host,
+                "app_preferences_set_surface_interaction",
+                Some(json!({"kind":"island","interaction":interaction,"value":"{\"version\":2}"})))
+                .await.expect("dedicated host write");
+            let saved: serde_json::Value = serde_json::from_str(result.as_str().unwrap()).unwrap();
+            assert_eq!(saved["surfaces"]["island"]["interaction"], interaction);
+            assert_eq!(saved["locale"], "zh-CN");
+            dispatch(&core, &host, WindowOrigin::Main, "app_preferences_set",
+                Some(json!({"value":initial}))).await.unwrap();
+            let loaded = dispatch(&core, &host, WindowOrigin::Main,
+                "app_preferences_get", None).await.unwrap();
+            let loaded: serde_json::Value = serde_json::from_str(loaded.as_str().unwrap()).unwrap();
+            assert_eq!(loaded["surfaces"]["island"]["interaction"], interaction);
+        }
+        for origin in [WindowOrigin::Main, WindowOrigin::LyricsIsland] {
+            assert!(dispatch(&core, &host, origin, "app_preferences_set_surface_interaction",
+                Some(json!({"kind":"island","interaction":"passive-locked","value":"{\"version\":2}"})))
+                .await.is_err(), "renderers must go through the host");
+        }
+    });
+}

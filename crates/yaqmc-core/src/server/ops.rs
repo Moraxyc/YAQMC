@@ -462,6 +462,22 @@ pub fn app_preferences_set(
     app_preferences::set_preferences(&StoragePreferences { storage }, &FnSink(notify), value)
 }
 
+pub fn app_preferences_set_surface_interaction(
+    storage: &StorageService,
+    kind: &str,
+    interaction: &str,
+    value: String,
+    notify: impl Fn(&str),
+) -> Result<String, String> {
+    app_preferences::set_surface_interaction(
+        &StoragePreferences { storage },
+        &FnSink(notify),
+        kind,
+        interaction,
+        value,
+    )
+}
+
 const LYRICS_SURFACE_GEOMETRY_PREFIX: &str = "lyrics-surface-geometry:";
 
 fn lyrics_surface_geometry_key(key: &str) -> Result<&str, String> {

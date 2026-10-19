@@ -39,8 +39,8 @@ use super::types::{
     ProviderQualityParams, ProviderRefreshParams, ProviderSearchParams, ProviderUrlParams,
     QualityParams, RecordErrorRequest, ReferenceParams, ReorderParams, RepeatParams, SampleParams,
     SearchParams, SeekParams, SettingKeyParams, SettingWriteParams, ShareSongParams, SongIdParams,
-    StatisticsRangeParams, TokenParams, TrackParams, TracksParams, UrlParams, ValueParams,
-    VolumeParams,
+    StatisticsRangeParams, SurfaceInteractionParams, TokenParams, TrackParams, TracksParams,
+    UrlParams, ValueParams, VolumeParams,
 };
 use super::HostDispatchHooks;
 
@@ -208,6 +208,7 @@ pub const CORE_DISPATCH_METHODS: &[&str] = &[
     "app_settings_get",
     "app_settings_set",
     "app_settings_remove",
+    "app_preferences_set_surface_interaction",
     "diagnostics_export_bundle_to",
     "statistics_export_to",
     "preferences_set_background_from",
@@ -1565,6 +1566,20 @@ async fn invoke_core(
                 host.notify_preferences_changed(stored);
             })
             .map(|()| json!({})))
+        }
+        "app_preferences_set_surface_interaction" => {
+            let SurfaceInteractionParams {
+                kind,
+                interaction,
+                value,
+            } = parse(&params)?;
+            cmd(ops::app_preferences_set_surface_interaction(
+                &core.storage(),
+                &kind,
+                &interaction,
+                value,
+                |stored| host.notify_preferences_changed(stored),
+            ))
         }
         "appearance_background_load" => {
             let ReferenceParams { reference } = parse(&params)?;

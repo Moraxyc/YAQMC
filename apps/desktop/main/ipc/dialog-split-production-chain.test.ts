@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -24,6 +24,11 @@ import { IpcRouter } from './router';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const fixturesRoot = path.join(repoRoot, 'packages/yaqmc-client/fixtures');
+const desktopVersion = (
+  JSON.parse(readFileSync(path.join(repoRoot, 'apps/desktop/package.json'), 'utf8')) as {
+    version: string;
+  }
+).version;
 const PNG = Buffer.from('\x89PNG\r\n\x1a\nrest', 'binary');
 const liveBinary = tryResolveCoreBinary({
   env: process.env,
@@ -194,8 +199,8 @@ async function liveProductionChain(root: string, openPath: string) {
   const savePath = path.join(root, 'YAQMC-diagnostics.zip');
   const supervisor = new CoreSupervisor({
     binary: liveBinary as string,
-    hostVersion: '0.1.0',
-    expectedCoreVersion: '0.1.0',
+    hostVersion: desktopVersion,
+    expectedCoreVersion: desktopVersion,
     autoRestart: false,
     handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
     shutdownTimeoutMs: SHUTDOWN_TIMEOUT_MS,
@@ -512,6 +517,46 @@ describe.skipIf(!liveBinary)('dialog-split live IpcRouter + Core stdio', () => {
       if (!reply.ok) {
         expect(reply.error.code).not.toBe('host.denied');
         expect(reply.error.message).not.toMatch(/not allowed from host/);
+      }
+    } finally {
+      await chain.supervisor.stop();
+    }
+  }, 30_000);
+});
+
+describe.skipIf(!liveBinary)('lyrics interaction live host + Core persistence', () => {
+  it('keeps lock and unlock across stale preference writes and Core restarts', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'yaqmc-lyrics-lock-'));
+    let chain = await liveProductionChain(root, path.join(root, 'unused.png'));
+    const initial = JSON.stringify({
+      version: 2,
+      locale: 'zh-CN',
+      surfaces: {
+        desktop: { enabled: false, interaction: 'interactive' },
+        island: { enabled: true, interaction: 'interactive' },
+      },
+    });
+    try {
+      await chain.supervisor.client.invoke('app_preferences_set', { value: initial }, 'main');
+      for (const interaction of ['passive-locked', 'interactive'] as const) {
+        const reply = await chain.router.invoke(1, {
+          method: 'lyrics_surface_set_interaction',
+          params: { kind: 'island', interaction, value: initial },
+        });
+        expect(reply.ok).toBe(true);
+        if (!reply.ok) throw new Error(reply.error.message);
+        expect(JSON.parse(reply.result as string).surfaces.island.interaction).toBe(interaction);
+        await chain.router.invoke(1, { method: 'app_preferences_set', params: { value: initial } });
+        await chain.supervisor.stop();
+        chain = await liveProductionChain(root, path.join(root, 'unused.png'));
+        const stored = await chain.supervisor.client.invoke(
+          'app_preferences_get',
+          undefined,
+          'main',
+        );
+        const doc = JSON.parse(stored as string);
+        expect(doc.surfaces.island.interaction).toBe(interaction);
+        expect(doc.locale).toBe('zh-CN');
       }
     } finally {
       await chain.supervisor.stop();
