@@ -463,7 +463,10 @@ describe('IpcRouter host intercepts', () => {
     const lyrics = mockLyrics();
     const unlock = mockUnlock();
     const coreInvoke = vi.fn(async (method: string, params?: unknown) => {
-      if (method === 'app_preferences_set') {
+      if (
+        method === 'app_preferences_set' ||
+        method === 'app_preferences_set_surface_interaction'
+      ) {
         return (params as { value: string }).value;
       }
       if (method === 'app_preferences_get') {
@@ -497,8 +500,10 @@ describe('IpcRouter host intercepts', () => {
     expect(lyrics.lock).toHaveBeenCalledWith('desktop', true);
     expect(emitSurfaceInteraction).toHaveBeenCalledWith('desktop', 'passive-locked');
     expect(coreInvoke).toHaveBeenCalledWith(
-      'app_preferences_set',
+      'app_preferences_set_surface_interaction',
       {
+        kind: 'desktop',
+        interaction: 'passive-locked',
         value: '{"version":2,"surfaces":{"desktop":{"interaction":"passive-locked"}}}',
       },
       'host',
@@ -1347,4 +1352,129 @@ describe('IpcRouter host intercepts', () => {
       error: hostDenied('deep_link_take_pending', 'lyrics-desktop'),
     });
   });
+});
+
+describe('persisted surface interaction contract', () => {
+  it('uses the dedicated core setter and returns the stored document', async () => {
+    const stored =
+      '{"version":2,"locale":"zh-CN","surfaces":{"island":{"interaction":"passive-locked"}}}';
+    const coreInvoke = vi.fn(async (method: string) =>
+      method === 'app_preferences_set_surface_interaction' ? stored : {},
+    );
+    const handlers = createHostHandlers({
+      openExternal: vi.fn(),
+      lyrics: mockLyrics(),
+      unlock: mockUnlock(),
+      capabilities: () => lyricsSurfaceCapabilities({ platform: 'linux', nativeWayland: false }),
+      showMainAndOpenSettings: vi.fn(),
+      coreInvoke,
+    });
+    const result = await handlers.lyrics_surface_set_interaction(
+      { kind: 'island', interaction: 'passive-locked', value: '{"version":2}' },
+      undefined,
+      'main',
+    );
+    expect(result).toBe(stored);
+    expect(coreInvoke).toHaveBeenCalledWith(
+      'app_preferences_set_surface_interaction',
+      {
+        kind: 'island',
+        interaction: 'passive-locked',
+        value: expect.any(String),
+      },
+      'host',
+    );
+  });
+
+  it('does not announce or apply a lock when persistence fails', async () => {
+    const lyrics = mockLyrics();
+    const emitSurfaceInteraction = vi.fn();
+    const handlers = createHostHandlers({
+      openExternal: vi.fn(),
+      lyrics,
+      unlock: mockUnlock(),
+      capabilities: () => lyricsSurfaceCapabilities({ platform: 'linux', nativeWayland: false }),
+      showMainAndOpenSettings: vi.fn(),
+      emitSurfaceInteraction,
+      coreInvoke: async () => {
+        throw new Error('disk write failed');
+      },
+    });
+    await expect(
+      handlers.lyrics_surface_set_interaction(
+        { kind: 'island', interaction: 'passive-locked', value: '{"version":2}' },
+        undefined,
+        'main',
+      ),
+    ).rejects.toThrow('disk write failed');
+    expect(lyrics.lock).not.toHaveBeenCalled();
+    expect(emitSurfaceInteraction).not.toHaveBeenCalled();
+  });
+});
+
+it('persists a cached startup lock before announcing the restored state', async () => {
+  const stored = '{"version":2,"surfaces":{"island":{"enabled":true,"interaction":"interactive"}}}';
+  const events: string[] = [];
+  const handlers = createHostHandlers({
+    openExternal: vi.fn(),
+    lyrics: mockLyrics(),
+    unlock: mockUnlock(),
+    capabilities: () => lyricsSurfaceCapabilities({ platform: 'linux', nativeWayland: false }),
+    showMainAndOpenSettings: vi.fn(),
+    emitSurfaceInteraction: () => {
+      events.push('announced');
+    },
+    coreInvoke: async (method, params) => {
+      if (method === 'app_preferences_get') return stored;
+      if (method === 'app_preferences_set_surface_interaction') {
+        events.push('persisted');
+        return (params as { value: string }).value;
+      }
+      throw new Error('unexpected generic save');
+    },
+  });
+  await handlers.lyrics_surfaces_reconcile({
+    surfaces: {
+      island: { enabled: true, interaction: 'passive-locked' },
+    },
+  });
+  expect(events).toEqual(['persisted', 'announced']);
+});
+
+it('serializes lock and unlock writes so native state follows the last request', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const transitions: string[] = [];
+  const handlers = createHostHandlers({
+    openExternal: vi.fn(),
+    lyrics: mockLyrics(),
+    unlock: mockUnlock(),
+    capabilities: () => lyricsSurfaceCapabilities({ platform: 'linux', nativeWayland: false }),
+    showMainAndOpenSettings: vi.fn(),
+    emitSurfaceInteraction: (_kind, interaction) => {
+      transitions.push(interaction);
+    },
+    coreInvoke: async (_method, params) => {
+      const { interaction, value } = params as { interaction: string; value: string };
+      if (interaction === 'passive-locked') await gate;
+      return value;
+    },
+  });
+  const locking = handlers.lyrics_surface_set_interaction({
+    kind: 'island',
+    interaction: 'passive-locked',
+    value: '{"version":2}',
+  });
+  const unlocking = handlers.lyrics_surface_set_interaction({
+    kind: 'island',
+    interaction: 'interactive',
+    value: '{"version":2}',
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(transitions).toEqual([]);
+  release();
+  await Promise.all([locking, unlocking]);
+  expect(transitions).toEqual(['passive-locked', 'interactive']);
 });

@@ -574,3 +574,34 @@ describe('protocol cap', () => {
     expect(FRAME_HARD_CAP_BYTES).toBe(32 * 1024 * 1024);
   });
 });
+
+it('reasserts locked input after asynchronous startup geometry restoration', async () => {
+  const window = mockWindow();
+  const clock = fakeClock();
+  const operations: string[] = [];
+  window.setBounds = () => {
+    operations.push('bounds');
+  };
+  window.setIgnoreMouseEvents = (ignore) => {
+    operations.push(ignore ? 'locked' : 'interactive');
+  };
+  const surfaces = createLyricsSurfaces({
+    createWindow: () => window,
+    preloadPath: PRELOAD,
+    clock,
+    settings: memorySettings(),
+  });
+  surfaces.show('island');
+  surfaces.lock('island', true);
+  await surfaces.restoreGeometry('island');
+  expect(operations.at(-1)).toBe('locked');
+  operations.length = 0;
+  clock.flush(LYRICS_SURFACE_GEOMETRY_DEBOUNCE_MS);
+  await surfaces.restoreGeometry('island');
+  expect(operations).toContain('bounds');
+  expect(operations.at(-1)).toBe('locked');
+  surfaces.lock('island', false);
+  operations.length = 0;
+  await surfaces.restoreGeometry('island');
+  expect(operations).toEqual(['bounds']);
+});

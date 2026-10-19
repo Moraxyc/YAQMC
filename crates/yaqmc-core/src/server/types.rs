@@ -591,3 +591,11 @@ pub struct PrimaryModeParams {
 pub struct LyricsDocumentParams {
     pub document: Option<crate::player::LyricDocument>,
 }
+
+/// Only the host may persist an explicit lyrics lock/unlock transition.
+#[derive(Deserialize)]
+pub struct SurfaceInteractionParams {
+    pub kind: String,
+    pub interaction: String,
+    pub value: String,
+}

@@ -563,25 +563,41 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
     if (!deps.coreInvoke) {
       return next;
     }
-    const stored = await deps.coreInvoke('app_preferences_set', { value: next }, 'host');
-    return typeof stored === 'string' && stored.length > 0 ? stored : next;
+    // Generic preference writes intentionally preserve the old interaction in
+    // Core. Only this host-only command may change it and returns the stored doc.
+    const stored = await deps.coreInvoke(
+      'app_preferences_set_surface_interaction',
+      { kind, interaction, value: next },
+      'host',
+    );
+    if (typeof stored !== 'string' || !stored.length) {
+      throw new Error('Core did not return persisted lyrics interaction');
+    }
+    return stored;
   };
 
-  const applyKind = (kind: LyricsSurfaceKind, config: SurfaceRuntimeLike | undefined): void => {
+  const applyKind = async (
+    kind: LyricsSurfaceKind,
+    config: SurfaceRuntimeLike | undefined,
+  ): Promise<void> => {
     if (!config || config.enabled !== true) {
       deps.lyrics.hide(kind);
       deps.unlock.hide(kind);
       return;
     }
-    deps.lyrics.show(kind);
     const requested = asSurfaceInteraction(config.interaction);
     if (requested === 'passive-locked') {
       if (!pendingUnlock.has(kind)) {
+        if (hostInteraction[kind] !== 'passive-locked') {
+          // Repair older installs whose local cache was locked but Core never saved it.
+          await persistInteraction(kind, 'passive-locked', undefined);
+        }
         hostInteraction[kind] = 'passive-locked';
       }
     } else if (requested === 'interactive' && pendingUnlock.delete(kind)) {
       hostInteraction[kind] = 'interactive';
     }
+    deps.lyrics.show(kind);
     applyNativeInteraction(kind);
   };
 
@@ -598,8 +614,8 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
     },
     lyrics_surfaces_reconcile: async (params) => {
       const surfaces = asSurfaceRuntimeMap(params);
-      applyKind('desktop', surfaces?.desktop);
-      applyKind('island', surfaces?.island);
+      await applyKind('desktop', surfaces?.desktop);
+      await applyKind('island', surfaces?.island);
       return deps.capabilities();
     },
     lyrics_surface_capabilities: async () => deps.capabilities(),
@@ -629,14 +645,15 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
       if (!interaction) {
         return '';
       }
+      const value =
+        params && typeof params === 'object' ? (params as { value?: unknown }).value : undefined;
+      const stored = await persistInteraction(kind, interaction, value);
       if (interaction === 'passive-locked') {
         pendingUnlock.delete(kind);
       }
       hostInteraction[kind] = interaction;
       applyNativeInteraction(kind);
-      const value =
-        params && typeof params === 'object' ? (params as { value?: unknown }).value : undefined;
-      return persistInteraction(kind, interaction, value);
+      return stored;
     },
     lyrics_surface_show_settings: async () => {
       deps.showMainAndOpenSettings();
@@ -646,10 +663,10 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
       if (!kind || !originMayUnlockKind(origin, kind)) {
         return;
       }
+      await persistInteraction(kind, 'interactive', undefined);
       pendingUnlock.add(kind);
       hostInteraction[kind] = 'interactive';
       applyNativeInteraction(kind);
-      await persistInteraction(kind, 'interactive', undefined);
     },
     lyrics_surfaces_unlock_all: async () => {
       let unlocked = 0;
@@ -658,10 +675,10 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
           deps.unlock.hide(kind);
           continue;
         }
+        await persistInteraction(kind, 'interactive', undefined);
         pendingUnlock.add(kind);
         hostInteraction[kind] = 'interactive';
         applyNativeInteraction(kind);
-        await persistInteraction(kind, 'interactive', undefined);
         unlocked += 1;
       }
       return unlocked;
@@ -929,5 +946,22 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
     };
   }
 
+  // Settings, tray actions and startup reconciliation share one ordered stream.
+  // A slower save must not apply a stale lock after a later unlock has completed.
+  let interactionTransition: Promise<unknown> = Promise.resolve();
+  for (const method of [
+    'lyrics_surfaces_reconcile',
+    'lyrics_surface_set_interaction',
+    'lyrics_surface_unlock',
+    'lyrics_surfaces_unlock_all',
+  ]) {
+    const handler = handlers[method];
+    if (!handler) continue;
+    handlers[method] = (...args) => {
+      const next = interactionTransition.then(() => handler(...args));
+      interactionTransition = next.catch(() => undefined);
+      return next;
+    };
+  }
   return handlers;
 }

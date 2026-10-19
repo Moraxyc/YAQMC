@@ -731,6 +731,8 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
         persistenceError: null,
       };
     });
+    // Host interaction events must also update the cache used on the next boot.
+    writeCache(persistedSlice(get()));
   },
   setManagedBackground: (reference, dataUri) => {
     set((state) => ({
