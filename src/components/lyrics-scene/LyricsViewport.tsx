@@ -327,6 +327,7 @@ export function LyricsViewport({
     reducedMotion,
     allowSeek,
     seek,
+    presentationOffsetMs,
   ]);
 
   useEffect(() => onFollowStateChange?.('active'), [onFollowStateChange]);

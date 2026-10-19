@@ -192,4 +192,28 @@ describe('native-lyrics-bridge', () => {
     unsubscribe();
     expect(removeMock).toHaveBeenCalled();
   });
+
+  it('contains asynchronous listener registration failures', async () => {
+    const warnMock = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const registrationError = new Error('native bridge unavailable');
+    const addListenerMock = vi.fn().mockRejectedValue(registrationError);
+
+    (globalThis as unknown as { Capacitor?: unknown }).Capacitor = {
+      Plugins: {
+        YaqmcNative: {
+          invoke: vi.fn(),
+          addListener: addListenerMock,
+        },
+      },
+    };
+
+    onNativeLyricsSeek(vi.fn());
+    await vi.waitFor(() =>
+      expect(warnMock).toHaveBeenCalledWith(
+        'Failed to attach lyricsSeek listener',
+        registrationError,
+      ),
+    );
+    warnMock.mockRestore();
+  });
 });

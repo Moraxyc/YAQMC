@@ -100,13 +100,17 @@ export function onNativeLyricsSeek(callback: (positionMs: number) => void): () =
     });
 
     if (result && 'then' in result && typeof result.then === 'function') {
-      void result.then((h) => {
-        if (removed) {
-          void h?.remove();
-        } else {
-          handle = h;
-        }
-      });
+      void result
+        .then((h) => {
+          if (removed) {
+            void h?.remove();
+          } else {
+            handle = h;
+          }
+        })
+        .catch((error: unknown) => {
+          console.warn('Failed to attach lyricsSeek listener', error);
+        });
     } else if (result && 'remove' in result && typeof result.remove === 'function') {
       if (removed) {
         void result.remove();
