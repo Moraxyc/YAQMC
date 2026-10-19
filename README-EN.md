@@ -57,11 +57,11 @@ the architecture and tested scope.
 
 Electron releases publish the package formats that each supported runner can build natively:
 
-| Platform | Architectures         | Packages                                                                                 |
-| -------- | --------------------- | ---------------------------------------------------------------------------------------- |
-| Windows  | x64 / AMD64, ARM64    | NSIS `.exe`, portable `.exe`                                                             |
+| Platform | Architectures         | Packages                                                                                |
+| -------- | --------------------- | --------------------------------------------------------------------------------------- |
+| Windows  | x64 / AMD64, ARM64    | NSIS `.exe`, portable `.exe`                                                            |
 | Linux    | x86_64 / AMD64, ARM64 | AppImage, Debian `.deb`, RPM `.rpm`, portable `.tar.gz`, AUR (`yaqmc-bin`, `yaqmc-git`) |
-| Android  | ARM64                 | signed `.apk`                                                                            |
+| Android  | ARM64                 | signed `.apk`                                                                           |
 
 AMD64, x86_64, and the release label x64 name the same architecture. Windows i686/x86 packages are no longer published.
 Arch Linux users can install directly via AUR using [`yaqmc-bin`](https://aur.archlinux.org/packages/yaqmc-bin) (prebuilt binary, recommended) or [`yaqmc-git`](https://aur.archlinux.org/packages/yaqmc-git) (VCS package built from the latest main branch).

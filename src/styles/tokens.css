@@ -36,14 +36,13 @@
   font-stretch: 100%;
   font-variation-settings: 'wdth' 100;
   --font-ui-text:
-    'YAQMC Text', 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI Variable',
-    'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC',
-    'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN', 'Microsoft YaHei', sans-serif;
+    'YAQMC Text', 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI',
+    system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC',
+    'Source Han Sans CN', 'Microsoft YaHei', sans-serif;
   --font-ui-display:
-    'YAQMC Display', 'SF Pro Display', 'Segoe UI Variable Display',
-    'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont,
-    'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN',
-    'Microsoft YaHei', sans-serif;
+    'YAQMC Display', 'SF Pro Display', 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI',
+    system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC',
+    'Source Han Sans CN', 'Microsoft YaHei', sans-serif;
   font-family: var(--font-ui-text);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
