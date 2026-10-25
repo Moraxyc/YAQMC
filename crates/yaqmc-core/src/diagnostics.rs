@@ -1085,7 +1085,10 @@ mod tests {
             .any(|name| name.starts_with("yaqmc")));
 
         let mut zip = zip::ZipArchive::new(fs::File::open(&result.path).unwrap()).unwrap();
-        let names: Vec<String> = zip.file_names().map(String::from).collect();
+        let names: Vec<String> = zip
+            .file_names()
+            .map(|name| name.expect("valid ZIP entry name").into_owned())
+            .collect();
         for required in [
             "manifest.json",
             "diagnostics.json",
@@ -1323,7 +1326,10 @@ mod tests {
         )
         .expect("bundle");
         let zip = zip::ZipArchive::new(fs::File::open(&result.path).unwrap()).unwrap();
-        let names: Vec<String> = zip.file_names().map(String::from).collect();
+        let names: Vec<String> = zip
+            .file_names()
+            .map(|name| name.expect("valid ZIP entry name").into_owned())
+            .collect();
         assert!(!names.iter().any(|name| name == "host.json"));
         assert!(!names.iter().any(|name| name == "host.log"));
     }
@@ -1373,7 +1379,10 @@ mod tests {
         .expect("bundle with host payload");
         assert_eq!(result.path, dest);
         let mut zip = zip::ZipArchive::new(fs::File::open(&dest).unwrap()).unwrap();
-        let names: Vec<String> = zip.file_names().map(String::from).collect();
+        let names: Vec<String> = zip
+            .file_names()
+            .map(|name| name.expect("valid ZIP entry name").into_owned())
+            .collect();
         assert!(names.iter().any(|name| name == "host.json"));
         assert!(names.iter().any(|name| name == "host.log"));
         let mut host_json = String::new();

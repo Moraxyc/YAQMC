@@ -106,6 +106,15 @@ pub fn inspect_package(path: &Path) -> Result<PackageInspection, PackageError> {
         {
             return Err(PackageError::Symlink);
         }
+        // Validate the original spelling before ZIP path normalization can
+        // discard a Windows drive prefix or another forbidden component.
+        let raw_name = entry
+            .name()
+            .map_err(|_| PackageError::Unreadable)?
+            .replace('\\', "/");
+        if !is_safe_package_path(raw_name.trim_end_matches('/')) {
+            return Err(PackageError::UnsafePath);
+        }
         let name = entry
             .enclosed_name()
             .ok_or(PackageError::UnsafePath)?

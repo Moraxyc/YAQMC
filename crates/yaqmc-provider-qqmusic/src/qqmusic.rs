@@ -4149,8 +4149,8 @@ fn extract_qrc_content(raw: &str) -> Option<String> {
             Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
                 for attribute in element.attributes().flatten() {
                     if attribute.key.as_ref() == b"LyricContent" {
-                        return attribute
-                            .decode_and_unescape_value(reader.decoder())
+                        let decoded = reader.decoder().decode(&attribute.value).ok()?;
+                        return quick_xml::escape::unescape(&decoded)
                             .ok()
                             .map(|value| value.into_owned());
                     }
