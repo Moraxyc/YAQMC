@@ -360,7 +360,10 @@ fn diagnostic_bundle_counts_every_uncompressed_entry_and_skips_sparse_oversize_l
 
     let mut archive = zip::ZipArchive::new(fs::File::open(&result.path).expect("bundle file"))
         .expect("valid ZIP");
-    let names = archive.file_names().map(str::to_owned).collect::<Vec<_>>();
+    let names = archive
+        .file_names()
+        .map(|name| name.expect("valid ZIP entry name").into_owned())
+        .collect::<Vec<_>>();
     for required in [
         "manifest.json",
         "diagnostics.json",
