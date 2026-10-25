@@ -7,7 +7,7 @@ appId: org.yaqmc.desktop
 productName: YAQMC
 copyright: GPL-3.0-or-later
 asar: true
-electronVersion: 43.7.9
+electronVersion: 43.8.3
 publish:
   provider: github
   owner: YAQMC
