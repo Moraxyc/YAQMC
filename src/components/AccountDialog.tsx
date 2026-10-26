@@ -11,6 +11,23 @@ const FALLBACK_LOGIN_METHODS: readonly AccountLoginMethodDescriptor[] = [
   { id: 'qq', label: 'QQ', flow: 'oauth' },
   { id: 'wechat', label: 'WeChat', flow: 'oauth' },
 ];
+const FALLBACK_SPOTIFY_LOGIN_METHODS: readonly AccountLoginMethodDescriptor[] = [
+  { id: 'browser-oauth', label: 'Spotify browser login (PKCE)', flow: 'oauth' },
+];
+
+function hasQrLoginFallback(provider: { id?: string; displayName: string }): boolean {
+  const identity = `${provider.id ?? ''} ${provider.displayName}`.toLowerCase();
+  return identity.includes('netease') || identity.includes('kugou') || identity.includes('酷狗');
+}
+
+function fallbackLoginMethodsForProvider(provider: {
+  id?: string;
+  displayName: string;
+}): readonly AccountLoginMethodDescriptor[] {
+  if (provider.id === 'qqmusic') return FALLBACK_LOGIN_METHODS;
+  const identity = `${provider.id ?? ''} ${provider.displayName}`.toLowerCase();
+  return identity.includes('spotify') ? FALLBACK_SPOTIFY_LOGIN_METHODS : [];
+}
 
 function isOwnedState(snapshot: AccountSnapshot): boolean {
   return (
@@ -33,6 +50,7 @@ function stateMessage(
   error: AccountRuntimeError | null,
   t: (key: string, options?: Record<string, unknown>) => string,
   providerName: string,
+  providerId?: string,
 ): string {
   if (error) {
     return t(
@@ -43,6 +61,9 @@ function stateMessage(
           'secure-store': 'errorSecureStore',
           protocol: 'errorProtocol',
           unknown: 'errorUnknown',
+          'mobile-login-required': 'errorMobileLoginRequired',
+          backend: 'errorBackend',
+          configuration: 'errorConfiguration',
         } satisfies Record<AccountRuntimeError, string>
       )[error],
       { provider: providerName },
@@ -56,7 +77,7 @@ function stateMessage(
     case 'starting-login':
       return t('starting');
     case 'waiting-for-scan':
-      if (snapshot.launchUrl) return t('waitingMobileScan');
+      if (providerId === 'qqmusic' && snapshot.launchUrl) return t('waitingMobileScan');
       return t('waitingScan', { provider: providerName });
     case 'waiting-for-confirmation':
       return t('waitingConfirmation');
@@ -92,6 +113,7 @@ export function AccountDialog() {
   const error = useAccountStore((state) => state.error);
   const closeDialog = useAccountStore((state) => state.closeDialog);
   const startLogin = useAccountStore((state) => state.startLogin);
+  const startQrLogin = useAccountStore((state) => state.startQrLogin);
   const reopenLogin = useAccountStore((state) => state.reopenLogin);
   const refreshQr = useAccountStore((state) => state.refreshQr);
   const cancelLogin = useAccountStore((state) => state.cancelLogin);
@@ -105,10 +127,15 @@ export function AccountDialog() {
     provider: NonNullable<typeof accountProvider>;
     methods: readonly AccountLoginMethodDescriptor[];
   } | null>(null);
+  const fallbackLoginMethods = accountProvider
+    ? fallbackLoginMethodsForProvider(accountProvider)
+    : [];
   const loginMethods = accountProvider?.getLoginMethods
     ? loadedLoginMethods?.provider === accountProvider
-      ? loadedLoginMethods.methods
-      : []
+      ? loadedLoginMethods.methods.length > 0
+        ? loadedLoginMethods.methods
+        : fallbackLoginMethods
+      : fallbackLoginMethods
     : FALLBACK_LOGIN_METHODS;
   const visibleLoginMethods = usesQqMusicPhoneLogin
     ? loginMethods.filter((method) => method.id !== 'wechat')
@@ -145,6 +172,7 @@ export function AccountDialog() {
   const waiting = isOwnedState(snapshot);
   // The active contract, not the current orientation, determines the authorization route.
   const canReopen = Boolean(
+    accountProvider.id === 'qqmusic' &&
     qrImage &&
     snapshot.state === 'waiting-for-scan' &&
     snapshot.launchUrl &&
@@ -165,6 +193,11 @@ export function AccountDialog() {
     snapshot.state === 'network-error' ||
     snapshot.state === 'protocol-error' ||
     snapshot.state === 'expired';
+  const canStartQrLogin =
+    canStart &&
+    (snapshot.capabilities.qrLogin || hasQrLoginFallback(accountProvider)) &&
+    visibleLoginMethods.length === 0;
+  const hasLoginAction = visibleLoginMethods.length > 0 || canStartQrLogin;
 
   const close = () => void closeDialog(accountProvider);
   const trapFocus = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -222,7 +255,7 @@ export function AccountDialog() {
 
         <div className="account-dialog__body">
           <p role="status" aria-live="polite">
-            {stateMessage(snapshot, effectiveError, t, providerLabel)}
+            {stateMessage(snapshot, effectiveError, t, providerLabel, accountProvider.id)}
           </p>
           {qrImage && (
             <div className="account-dialog__qr">
@@ -232,12 +265,22 @@ export function AccountDialog() {
           {canReopen && (
             <small className="account-dialog__notice">{t('mobileCurrentQrNotice')}</small>
           )}
-          {canStart && (
+          {canStart && hasLoginAction && (
             <small className="account-dialog__notice">
-              {t(usesQqMusicPhoneLogin ? 'mobileQqNotice' : 'oauthNotice', {
-                provider: providerLabel,
-              })}
+              {t(
+                canStartQrLogin || visibleLoginMethods[0]?.flow === 'qr'
+                  ? 'qrNotice'
+                  : usesQqMusicPhoneLogin
+                    ? 'mobileQqNotice'
+                    : 'oauthNotice',
+                {
+                  provider: providerLabel,
+                },
+              )}
             </small>
+          )}
+          {canStart && !hasLoginAction && (
+            <small className="account-dialog__notice">{t('noMethods')}</small>
           )}
           {busy && <small>{t('busy')}</small>}
         </div>
@@ -253,6 +296,16 @@ export function AccountDialog() {
               {t('reopenQqMusicApp')}
             </button>
           )}
+          {canStartQrLogin && (
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={busy}
+              onClick={() => void startQrLogin(accountProvider)}
+            >
+              {t('signInQr')}
+            </button>
+          )}
           {canStart &&
             visibleLoginMethods.map((method, index) => (
               <button
@@ -260,7 +313,11 @@ export function AccountDialog() {
                 type="button"
                 className={`button ${index === 0 ? 'button--primary' : 'button--secondary'}`}
                 disabled={busy}
-                onClick={() => void startLogin(accountProvider, method.id)}
+                onClick={() =>
+                  void (method.flow === 'qr'
+                    ? startQrLogin(accountProvider)
+                    : startLogin(accountProvider, method.id))
+                }
               >
                 {method.id === 'qq'
                   ? terminal
@@ -268,19 +325,23 @@ export function AccountDialog() {
                     : t(usesQqMusicPhoneLogin ? 'signInQqMusicApp' : 'signInQq')
                   : method.id === 'wechat'
                     ? t('signInWechat')
-                    : method.label}
+                    : method.flow === 'qr'
+                      ? t('signInQr')
+                      : method.label}
               </button>
             ))}
-          {snapshot.state === 'expired' && !usesQqMusicPhoneLogin && (
-            <button
-              type="button"
-              className="button button--secondary"
-              disabled={busy}
-              onClick={() => void refreshQr(accountProvider)}
-            >
-              {t('refresh')}
-            </button>
-          )}
+          {snapshot.state === 'expired' &&
+            snapshot.capabilities.qrLogin &&
+            !usesQqMusicPhoneLogin && (
+              <button
+                type="button"
+                className="button button--secondary"
+                disabled={busy}
+                onClick={() => void refreshQr(accountProvider)}
+              >
+                {t('refresh')}
+              </button>
+            )}
           {waiting && (
             <button
               type="button"

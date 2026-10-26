@@ -1,12 +1,34 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CoreInvokeError } from './core/client';
 import { handleRendererInvoke, type InvokeTarget } from './ipc';
+import { BrowserLoginError } from './windows/oauth-window';
 
 function mockClient(impl: InvokeTarget['invoke']): InvokeTarget {
   return { invoke: impl };
 }
 
 describe('renderer invoke routing', () => {
+  it('preserves the actionable KuGou mobile-login requirement across IPC', async () => {
+    const reply = await handleRendererInvoke(
+      mockClient(async () => {
+        throw new BrowserLoginError('mobile-login-required', 'Use mobile QR login');
+      }),
+      { method: 'provider_auth_oauth_start' },
+    );
+    expect(reply).toEqual({
+      ok: false,
+      error: {
+        code: 'core.command_error',
+        message: 'Use mobile QR login',
+        retryable: false,
+        details: {
+          code: 'mobile-login-required',
+          message: 'Use mobile QR login',
+          retryable: false,
+        },
+      },
+    });
+  });
   it('proxies player_snapshot to the core client', async () => {
     const invoke = vi.fn(async () => ({ playbackState: 'paused', positionMs: 0 }));
     const reply = await handleRendererInvoke(mockClient(invoke), { method: 'player_snapshot' });

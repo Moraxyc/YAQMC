@@ -333,6 +333,17 @@ describe('account runtime', () => {
     resetAccountRuntimeForTest();
   });
 
+  it.each([
+    ['provider-backend-unavailable', 'backend'],
+    ['provider-not-configured', 'configuration'],
+  ] as const)('keeps %s actionable in the account surface', async (code, category) => {
+    const provider = accountProvider({
+      getAccountSnapshot: vi.fn().mockRejectedValue(new ProviderError(code, 'unavailable', false)),
+    });
+    await useAccountStore.getState().refreshSnapshot(provider);
+    expect(useAccountStore.getState().error).toBe(category);
+  });
+
   it('drops an older account snapshot after a newer generation wins', async () => {
     const first = deferred<AccountSnapshot>();
     const second = deferred<AccountSnapshot>();
@@ -655,7 +666,7 @@ describe('account runtime', () => {
     });
   });
 
-  it('heartbeats the exact owner pair and stops/cancels after rejection', async () => {
+  it('heartbeats the exact owner pair and preserves the QR after rejection', async () => {
     vi.useFakeTimers();
     const heartbeatQrLogin = vi.fn().mockRejectedValue(new Error('private native detail'));
     const cancelQrLogin = vi.fn().mockResolvedValue(cancelledSnapshot());
@@ -682,15 +693,16 @@ describe('account runtime', () => {
 
     expect(heartbeatQrLogin).toHaveBeenCalledOnce();
     expect(heartbeatQrLogin).toHaveBeenCalledWith('attempt-a', 'lease-a', expect.any(AbortSignal));
-    expect(cancelQrLogin).toHaveBeenCalledOnce();
-    expect(useAccountStore.getState().displayedQrImageDataUri).toBeNull();
+    expect(cancelQrLogin).not.toHaveBeenCalled();
+    expect(useAccountStore.getState().displayedQrImageDataUri).toBe(waiting.qrImageDataUri);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });
-    expect(heartbeatQrLogin).toHaveBeenCalledOnce();
-    expect(cancelQrLogin).toHaveBeenCalledOnce();
+    expect(heartbeatQrLogin.mock.calls.length).toBeGreaterThan(1);
+    expect(cancelQrLogin).not.toHaveBeenCalled();
     unmount();
+    await act(async () => Promise.resolve());
     expect(cancelQrLogin).toHaveBeenCalledOnce();
   });
 
@@ -864,6 +876,17 @@ describe('account runtime', () => {
     await start;
     expect(useAccountStore.getState().snapshot).toMatchObject({ attemptId: 'attempt-a' });
     expect(provider.cancelQrLogin).not.toHaveBeenCalled();
+  });
+
+  it('starts a QR login through the provider-owned account action', async () => {
+    const startQrLogin = vi.fn().mockResolvedValue(waitingSnapshot());
+    const provider = accountProvider({ startQrLogin });
+    useAccountStore.setState({ snapshot: guestSnapshot(), dialogOpen: true });
+
+    await useAccountStore.getState().startQrLogin(provider);
+
+    expect(startQrLogin).toHaveBeenCalledWith(undefined);
+    expect(useAccountStore.getState().snapshot.state).toBe('waiting-for-scan');
   });
 
   it('delegates Android heartbeat ownership to native while refreshing the same visible attempt', async () => {
@@ -1764,7 +1787,6 @@ describe('account runtime', () => {
   it('keeps a heartbeat failure in A when B becomes the active facade', async () => {
     const heartbeat = deferred<AccountSnapshot>();
     const refreshA = deferred<AccountSnapshot>();
-    const cancelA = deferred<AccountSnapshot>();
     const waitingA = {
       ...waitingSnapshot(),
       providerId: 'account-test',
@@ -1775,7 +1797,7 @@ describe('account runtime', () => {
       getAccountSnapshot: vi.fn().mockResolvedValue(waitingA),
       refreshAccount: vi.fn(() => refreshA.promise),
       heartbeatQrLogin: vi.fn(() => heartbeat.promise),
-      cancelQrLogin: vi.fn(() => cancelA.promise),
+      cancelQrLogin: vi.fn(),
     });
     const providerB = accountProvider({
       profileId: 'profile-b',
@@ -1787,11 +1809,12 @@ describe('account runtime', () => {
     });
 
     await useAccountStore.getState().refreshSnapshot(providerA);
+    useAccountStore.getState().openDialog();
     const pendingHeartbeat = useAccountStore.getState().heartbeatLogin(providerA);
     await useAccountStore.getState().refreshSnapshot(providerB);
     const before = useAccountStore.getState();
     heartbeat.reject(new ProviderError('offline', 'transient', true));
-    await waitFor(() => expect(providerA.cancelQrLogin).toHaveBeenCalledOnce());
+    await pendingHeartbeat;
 
     expect(useAccountStore.getState()).toMatchObject({
       snapshot: before.snapshot,
@@ -1800,20 +1823,16 @@ describe('account runtime', () => {
     });
 
     const pendingA = useAccountStore.getState().refreshAccount(providerA);
+    if (waitingA.state !== 'waiting-for-scan') throw new Error('invalid waiting QR fixture');
     expect(useAccountStore.getState()).toMatchObject({
       snapshot: waitingA,
-      displayedQrImageDataUri: null,
+      displayedQrImageDataUri: waitingA.qrImageDataUri,
       busy: false,
       error: 'network',
     });
     refreshA.resolve(waitingA);
     await pendingA;
-    cancelA.resolve({
-      ...cancelledSnapshot(),
-      providerId: 'account-test',
-      profileId: 'profile-a',
-    });
-    await pendingHeartbeat;
+    expect(providerA.cancelQrLogin).not.toHaveBeenCalled();
   });
 
   it('keeps a desktop waiting QR owner through same-scope provider replacement', async () => {

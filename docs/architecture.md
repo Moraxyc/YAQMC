@@ -14,7 +14,7 @@ windows · tray · shortcuts · updater · dialogs · Core supervisor
         ▼
 yaqmc-core
 ProviderRegistry
-        ├── QQMusicProvider ── pinned qm-api-rs + retained hybrids
+        ├── QQMusicProvider ── pinned qm-api-rs typed API + host policy/DTO mapping
         └── ExtensionHost ── Wasmtime Provider Component (`yaqmc:provider@0.1.0`)
                               └── WIT-selected Host imports
                                   exact-origin HTTPS · private storage/cache · credential handles
@@ -44,6 +44,10 @@ Release renderer: NativeApplication only; fake data and QA hooks are rejected by
 - Component playback returns a bounded recipe. Core turns that recipe into an opaque `Read + Seek` source; signed
   URLs, headers, cache paths, and credential handles never enter renderer IPC. Account storage and credentials are
   namespaced by provider instance and cannot overlap the built-in QQ Music account.
+- Settings → Storage uses Core-owned `app_cache_stats` / `app_clear_cache` across all providers. Totals include the
+  shared media/artwork/metadata/lyrics cache and disposable Component cache files, counted once per namespace.
+  Clearing never removes private plugin KV, credentials, preferences, installed packages or listening history;
+  cache activity can repopulate entries afterwards. Provider cache extensions are not required.
 - `PlayerService` is the single owner of the active queue index, playback lifecycle, actual engine position,
   playback duration, volume, mute, repeat, shuffle, failure state, and lyric cursor.
 - `ContinuationService` owns guess/radar sessions, cursors, deduplication, prefetch, bounded retry, and stale-response

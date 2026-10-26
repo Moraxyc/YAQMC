@@ -18,7 +18,7 @@ mount only in the editor.
 Typography uses one formula on the scene root:
 
 ```text
-fontBase = clamp(18px, 5.6cqh, 96px)
+fontBase = min(clamp(18px, 5.6cqh, 96px), max(18px, lyricViewportWidth / 16))
 effectivePrimary = fontBase × fontScale
 translation / romanization = primary × 0.42
 ```
@@ -26,6 +26,15 @@ translation / romanization = primary × 0.42
 `--lyrics-font-size` is set on the scene as a resolved pixel value from the scene height, so the
 composer preview updates while dragging. `.lyrics-line` does not clamp again. Classic and Vinyl
 preview the same cover-fill backdrop as the runtime lyrics page.
+
+Runtime adapts to the current content size when a window moves between monitors, changes resolution/DPI, resizes or
+enters fullscreen. Landscape keeps the saved `scene`. Portrait prefers `portraitScene`; when absent the host stacks
+artwork, metadata, lyrics and controls. Automatic sizing always multiplies by the user's `fontScale` and never rewrites
+saved font, spacing, weight or geometry settings.
+
+The editor offers Desktop 16:9, Portrait 9:16 and Current window frames. Portrait geometry and visibility save independently;
+font scale is shared. Undo, redo, duplicate and save preserve both layouts. Merely switching frames does not dirty a preset.
+On portrait windows the inspector moves below the preview.
 
 ## Editing
 

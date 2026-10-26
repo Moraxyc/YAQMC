@@ -29,6 +29,8 @@ import type {
   ShareTarget,
   CatalogSearchKind,
   Song,
+  SongCommentsRequest,
+  SongCommentsPage,
 } from '../domain/music';
 
 export interface CatalogMusicProvider {
@@ -69,6 +71,8 @@ export interface MusicProvider extends CatalogMusicProvider, LyricsMusicProvider
   readonly id: string;
   readonly profileId: string;
   readonly displayName: string;
+  /** Optional read-only comments capability; cursors belong to the provider. */
+  getComments?(request: SongCommentsRequest, signal?: AbortSignal): Promise<SongCommentsPage>;
 }
 
 export interface AccountMusicProvider {

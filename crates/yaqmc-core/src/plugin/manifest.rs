@@ -45,6 +45,10 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderPluginManifest>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderPluginManifest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub federations: Vec<FederationPluginManifest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<String>,
     #[serde(default, skip_serializing_if = "indexmap_empty")]
     pub dependencies: std::collections::BTreeMap<String, String>,
@@ -91,6 +95,8 @@ pub enum ProviderCapability {
     Recommendation,
     #[serde(rename = "provider.lyrics")]
     Lyrics,
+    #[serde(rename = "provider.comments")]
+    Comments,
     #[serde(rename = "provider.account")]
     Account,
 }
@@ -102,6 +108,7 @@ impl ProviderCapability {
             Self::Playback => "provider.playback",
             Self::Recommendation => "provider.recommendation",
             Self::Lyrics => "provider.lyrics",
+            Self::Comments => "provider.comments",
             Self::Account => "provider.account",
         }
     }
@@ -112,6 +119,7 @@ impl ProviderCapability {
             Self::Playback => PluginPermission::ProviderPlayback,
             Self::Recommendation => PluginPermission::ProviderRecommendation,
             Self::Lyrics => PluginPermission::ProviderLyrics,
+            Self::Comments => PluginPermission::ProviderComments,
             Self::Account => PluginPermission::ProviderAccount,
         }
     }
@@ -160,6 +168,34 @@ pub struct ProviderPluginManifest {
     pub wit_version: String,
     pub world: String,
     pub capabilities: Vec<ProviderCapability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FederationPluginManifest {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
+    #[serde(default)]
+    pub include_default_provider: bool,
+}
+
+impl PluginManifest {
+    pub fn provider_declarations(&self) -> Vec<&ProviderPluginManifest> {
+        if self.providers.is_empty() {
+            self.provider.iter().collect()
+        } else {
+            self.providers.iter().collect()
+        }
+    }
+
+    pub fn federation_declarations(&self) -> &[FederationPluginManifest] {
+        &self.federations
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -233,6 +269,7 @@ impl PluginManifest {
             if self.api_version == 3
                 || self.entrypoints.component.is_some()
                 || self.provider.is_some()
+                || !self.providers.is_empty()
             {
                 return Err(ManifestError::ManifestApiMismatch);
             }
@@ -247,44 +284,80 @@ impl PluginManifest {
         {
             return Err(ManifestError::ManifestApiMismatch);
         }
-        let provider = self
-            .provider
-            .as_ref()
-            .ok_or(ManifestError::InvalidProvider)?;
-        if !is_plugin_id(&provider.id)
-            || provider
-                .name
-                .as_ref()
-                .is_some_and(|name| name.trim().is_empty() || name.len() > 80)
-            || provider.wit_version != PROVIDER_WIT_VERSION
-            || provider.capabilities.is_empty()
-        {
+        if self.provider.is_some() && !self.providers.is_empty() {
             return Err(ManifestError::InvalidProvider);
         }
-        let world = ProviderWorld::parse(&provider.world).ok_or(ManifestError::InvalidProvider)?;
-        let capabilities = provider
-            .capabilities
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        if capabilities.len() != provider.capabilities.len() {
+        let providers = self.provider_declarations();
+        if providers.is_empty() {
             return Err(ManifestError::InvalidProvider);
         }
+        let mut provider_ids = BTreeSet::new();
         let requested = self.requested_permissions();
-        if capabilities
-            .iter()
-            .any(|capability| !requested.contains(&capability.permission()))
-        {
-            return Err(ManifestError::InvalidProvider);
+        for provider in providers {
+            if !is_plugin_id(&provider.id)
+                || !provider_ids.insert(provider.id.as_str())
+                || provider
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| name.trim().is_empty() || name.len() > 80)
+                || provider.wit_version != PROVIDER_WIT_VERSION
+                || provider.capabilities.is_empty()
+                || provider.platform.as_deref().is_some_and(|platform| {
+                    platform.is_empty()
+                        || platform.len() > 32
+                        || !platform.bytes().all(|byte| {
+                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                        })
+                })
+            {
+                return Err(ManifestError::InvalidProvider);
+            }
+            let world =
+                ProviderWorld::parse(&provider.world).ok_or(ManifestError::InvalidProvider)?;
+            let capabilities = provider
+                .capabilities
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            if capabilities.len() != provider.capabilities.len()
+                || capabilities
+                    .iter()
+                    .any(|capability| !requested.contains(&capability.permission()))
+            {
+                return Err(ManifestError::InvalidProvider);
+            }
+            let requests_storage = requested.contains(&PluginPermission::PluginStorage);
+            let requests_network = requested.contains(&PluginPermission::Network);
+            let has_account = capabilities.contains(&ProviderCapability::Account);
+            if world.has_storage() != requests_storage
+                || world.has_network() != requests_network
+                || world.has_credentials() != has_account
+            {
+                return Err(ManifestError::InvalidProvider);
+            }
         }
-        let requests_storage = requested.contains(&PluginPermission::PluginStorage);
-        let requests_network = requested.contains(&PluginPermission::Network);
-        let has_account = capabilities.contains(&ProviderCapability::Account);
-        if world.has_storage() != requests_storage
-            || world.has_network() != requests_network
-            || world.has_credentials() != has_account
-        {
-            return Err(ManifestError::InvalidProvider);
+        let declared_provider_ids = self
+            .provider_declarations()
+            .into_iter()
+            .map(|provider| provider.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut federation_ids = BTreeSet::new();
+        for federation in &self.federations {
+            if !is_plugin_id(&federation.id)
+                || provider_ids.contains(federation.id.as_str())
+                || !federation_ids.insert(federation.id.as_str())
+                || federation
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| name.trim().is_empty() || name.len() > 80)
+                || federation.members.is_empty()
+                || federation
+                    .members
+                    .iter()
+                    .any(|member| !declared_provider_ids.contains(member.as_str()))
+            {
+                return Err(ManifestError::InvalidProvider);
+            }
         }
         Ok(())
     }

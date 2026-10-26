@@ -542,45 +542,8 @@ impl QQMusicAuthProtocol for TransportQQMusicAuthProtocol {
             return Err(QQMusicError::AuthenticationExpired);
         }
         let client = self.login_client("auth.session.validate");
-        let payload =
+        let profile =
             crate::qmapi::auth::fetch_profile(Some(&client), session, cancellation.clone()).await?;
-        let request = payload.get("req").or_else(|| payload.get("req_0"));
-        require_session_validation_success(&payload, request)?;
-        let request = request.ok_or(QQMusicError::SchemaChanged)?;
-        let data = request.get("data").ok_or(QQMusicError::SchemaChanged)?;
-        let profile = data
-            .get("userInfo")
-            .or_else(|| data.get("info"))
-            .or_else(|| {
-                data.get("map_userinfo").and_then(|m| {
-                    m.get(&session.uin)
-                        .or_else(|| m.as_object().and_then(|obj| obj.values().next()))
-                })
-            })
-            .unwrap_or(data);
-        let nickname = first_string(
-            profile,
-            &["/nick", "/nickname", "/name", "/Name", "/NickName"],
-        )
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(QQMusicError::SchemaChanged)?;
-        let raw_avatar_url = first_string(
-            profile,
-            &[
-                "/headurl",
-                "/headUrl",
-                "/avatar",
-                "/avatarUrl",
-                "/Avatar",
-                "/logo",
-                "/ifpicurl",
-            ],
-        );
-        let avatar_url = raw_avatar_url
-            .as_deref()
-            .and_then(normalize_avatar_url)
-            .or_else(|| fallback_qq_avatar_url(&session.uin));
-
         let entitlement = match self.fetch_entitlement(session, cancellation).await {
             Ok(entitlement) => entitlement,
             Err(QQMusicError::Cancelled) => return Err(QQMusicError::Cancelled),
@@ -589,23 +552,14 @@ impl QQMusicAuthProtocol for TransportQQMusicAuthProtocol {
 
         Ok(ValidatedAccount {
             profile: AccountProfile {
-                avatar_url,
-                nickname,
+                avatar_url: profile.avatar_url,
+                nickname: profile.nickname,
                 masked_identity: mask_identity(&session.uin),
             },
             entitlement,
-            encrypted_uin: first_string(
-                profile,
-                &["/encryptUin", "/encrypt_uin", "/euin", "/EncryptUin"],
-            )
-            .or_else(|| {
-                first_string(
-                    data,
-                    &["/encryptUin", "/encrypt_uin", "/euin", "/EncryptUin"],
-                )
-            })
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| session.encrypted_uin.clone()),
+            encrypted_uin: profile
+                .encrypted_uin
+                .or_else(|| session.encrypted_uin.clone()),
         })
     }
 }
@@ -2788,47 +2742,16 @@ fn normalize_image_mime(value: &str) -> Option<&'static str> {
 }
 
 fn is_sanitized_avatar_url(value: &str) -> bool {
-    Url::parse(value).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url.port_or_known_default() == Some(443)
-            && matches!(
-                url.host_str(),
-                Some("qpic.y.qq.com" | "q.qlogo.cn" | "thirdwx.qlogo.cn" | "thirdqq.qlogo.cn")
-            )
-            && url.username().is_empty()
-            && url.password().is_none()
-    })
+    qqmusic_api::artwork::is_sanitized_avatar_url(value)
 }
 
+#[cfg(test)]
 fn normalize_avatar_url(value: &str) -> Option<String> {
-    let value = value.trim();
-    let mut url = if value.starts_with("//") {
-        Url::parse(&format!("https:{value}")).ok()?
-    } else {
-        Url::parse(value).ok()?
-    };
-    if url.scheme() == "http" {
-        if url.port_or_known_default() != Some(80)
-            || !matches!(
-                url.host_str(),
-                Some("qpic.y.qq.com" | "q.qlogo.cn" | "thirdwx.qlogo.cn" | "thirdqq.qlogo.cn")
-            )
-            || !url.username().is_empty()
-            || url.password().is_some()
-        {
-            return None;
-        }
-        url.set_scheme("https").ok()?;
-        url.set_port(None).ok()?;
-    }
-    let normalized = url.to_string();
-    is_sanitized_avatar_url(&normalized).then_some(normalized)
+    qqmusic_api::artwork::normalize_avatar_url(value)
 }
-
+#[cfg(test)]
 fn fallback_qq_avatar_url(uin: &str) -> Option<String> {
-    let plausible_qq =
-        (5..=12).contains(&uin.len()) && uin.bytes().all(|character| character.is_ascii_digit());
-    plausible_qq.then(|| format!("https://q.qlogo.cn/headimg_dl?dst_uin={uin}&spec=640"))
+    qqmusic_api::artwork::fallback_qq_avatar_url(uin)
 }
 
 #[cfg(test)]
@@ -2837,31 +2760,6 @@ fn require_success(response: &TransportResponse) -> Result<(), QQMusicError> {
         Ok(())
     } else {
         Err(QQMusicError::Protocol)
-    }
-}
-
-fn require_session_validation_success(
-    envelope: &Value,
-    request: Option<&Value>,
-) -> Result<(), QQMusicError> {
-    let global_code = json_code(envelope).ok_or(QQMusicError::SchemaChanged)?;
-    classify_session_validation_code(global_code)?;
-    let request_code = request
-        .and_then(json_code)
-        .ok_or(QQMusicError::SchemaChanged)?;
-    classify_session_validation_code(request_code)?;
-    Ok(())
-}
-
-fn classify_session_validation_code(code: i64) -> Result<(), QQMusicError> {
-    match code {
-        0 => Ok(()),
-        // These are the credential-expiry codes used by QQ Music's CGI protocol.
-        1000 | 104_400 | 104_401 => Err(QQMusicError::AuthenticationExpired),
-        2001 | 104_604 => Err(QQMusicError::RateLimited),
-        10_004 => Err(QQMusicError::Unavailable),
-        // Unknown business failures are not proof that credentials are invalid.
-        _ => Err(QQMusicError::SchemaChanged),
     }
 }
 
@@ -2879,22 +2777,6 @@ fn encrypted_uin_from_cookie_header(header: &str) -> Option<String> {
         let (name, value) = part.trim().split_once('=')?;
         (["euin", "encryptUin"].contains(&name) && !value.trim().is_empty())
             .then(|| value.trim().to_owned())
-    })
-}
-
-fn json_code(value: &Value) -> Option<i64> {
-    value
-        .get("code")
-        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
-}
-
-fn first_string(value: &Value, paths: &[&str]) -> Option<String> {
-    paths.iter().find_map(|path| {
-        let value = value.pointer(path)?;
-        value
-            .as_str()
-            .map(ToOwned::to_owned)
-            .or_else(|| value.as_u64().map(|value| value.to_string()))
     })
 }
 
@@ -5638,55 +5520,5 @@ mod tests {
             .validate_session(&session, CancellationToken::new())
             .await;
         assert!(matches!(cancelled, Err(QQMusicError::Cancelled)));
-    }
-
-    #[test]
-    fn session_validation_only_classifies_explicit_authentication_codes_as_expired() {
-        let envelope = json!({ "code": 0 });
-        let success = json!({ "code": 0 });
-        assert!(require_session_validation_success(&envelope, Some(&success)).is_ok());
-        for code in [1000, 104_400, 104_401] {
-            let response = json!({ "code": code });
-            assert!(matches!(
-                require_session_validation_success(&envelope, Some(&response)),
-                Err(QQMusicError::AuthenticationExpired)
-            ));
-            let rejected_envelope = json!({ "code": code });
-            assert!(matches!(
-                require_session_validation_success(&rejected_envelope, Some(&success)),
-                Err(QQMusicError::AuthenticationExpired)
-            ));
-        }
-        let rate_limited = json!({ "code": 2001 });
-        assert!(matches!(
-            require_session_validation_success(&envelope, Some(&rate_limited)),
-            Err(QQMusicError::RateLimited)
-        ));
-        assert!(matches!(
-            require_session_validation_success(&rate_limited, Some(&success)),
-            Err(QQMusicError::RateLimited)
-        ));
-        let signature_required = json!({ "code": 2000 });
-        assert!(matches!(
-            require_session_validation_success(&envelope, Some(&signature_required)),
-            Err(QQMusicError::SchemaChanged)
-        ));
-        let unknown = json!({ "code": 10_007 });
-        assert!(matches!(
-            require_session_validation_success(&envelope, Some(&unknown)),
-            Err(QQMusicError::SchemaChanged)
-        ));
-        assert!(matches!(
-            require_session_validation_success(&unknown, Some(&success)),
-            Err(QQMusicError::SchemaChanged)
-        ));
-        assert!(matches!(
-            require_session_validation_success(&json!({}), Some(&success)),
-            Err(QQMusicError::SchemaChanged)
-        ));
-        assert!(matches!(
-            require_session_validation_success(&envelope, None),
-            Err(QQMusicError::SchemaChanged)
-        ));
     }
 }

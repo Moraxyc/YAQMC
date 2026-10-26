@@ -11,6 +11,7 @@ vi.mock('../../application/yaqmc-runtime', () => ({
 
 import { isAccountMusicProvider, isShareMusicProvider } from '../music-provider';
 import { createNativeMusicProvider } from './native-music-provider';
+import { nativeProviderRequest } from './native-request';
 
 function descriptor(
   capabilities: Partial<ProviderDescriptor['capabilities']> = {},
@@ -33,6 +34,66 @@ function descriptor(
 }
 
 describe('NativeMusicProvider', () => {
+  it.each(['provider_lyrics', 'qqmusic_lyrics'] as const)(
+    'cancels legacy comment reads through %s',
+    async (command) => {
+      invoke.mockImplementation((method: string) =>
+        method === command ? new Promise(() => {}) : Promise.resolve(),
+      );
+      const controller = new AbortController();
+      const args =
+        command === 'qqmusic_lyrics'
+          ? { songId: 'track' }
+          : { providerId: 'plugin.example', profileId: 'work', id: 'track' };
+      const pending = nativeProviderRequest(command, args, controller.signal);
+      const observed = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      const requestId = invoke.mock.calls[0]![1].requestId;
+      controller.abort();
+      await observed;
+      expect(invoke).toHaveBeenLastCalledWith('provider_comments_cancel', {
+        providerId: command === 'qqmusic_lyrics' ? 'qqmusic' : 'plugin.example',
+        profileId: command === 'qqmusic_lyrics' ? undefined : 'work',
+        requestId,
+      });
+    },
+  );
+  it('cancels the exact native comment read immediately without waiting for its reply', async () => {
+    const provider = createNativeMusicProvider(descriptor({ comments: true }), 'work');
+    invoke.mockImplementation((method: string) =>
+      method === 'provider_comments' ? new Promise(() => {}) : Promise.resolve(),
+    );
+    const controller = new AbortController();
+    const pending = provider.getComments!(
+      { songId: 'track', sort: 'hot', limit: 20 },
+      controller.signal,
+    );
+    const observed = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    const requestId = invoke.mock.calls[0]![1].requestId;
+    controller.abort();
+    await observed;
+    expect(invoke).toHaveBeenLastCalledWith('provider_comments_cancel', {
+      providerId: 'plugin.example',
+      profileId: 'work',
+      requestId,
+    });
+  });
+  it('exposes declared comments and preserves provider/profile, cursor and parent', async () => {
+    const provider = createNativeMusicProvider(descriptor({ comments: true }), 'work');
+    const request = {
+      songId: 'source-track',
+      sort: 'new' as const,
+      limit: 20,
+      cursor: 'opaque',
+      parentId: 'parent',
+    };
+    await provider.getComments!(request);
+    expect(invoke).toHaveBeenCalledWith('provider_comments', {
+      providerId: 'plugin.example',
+      profileId: 'work',
+      request,
+    });
+    expect(createNativeMusicProvider(descriptor()).getComments).toBeUndefined();
+  });
   beforeEach(() => {
     host.kind = 'android';
     invoke.mockReset();

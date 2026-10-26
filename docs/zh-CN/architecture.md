@@ -15,7 +15,7 @@ Electron preload + Main
         ▼
 yaqmc-core
 ProviderRegistry
-        ├── QQMusicProvider ── 精确 pin 的 qm-api-rs + 保留的 hybrid
+        ├── QQMusicProvider ── 精确 pin 的 qm-api-rs 类型化 API + 宿主策略/DTO 映射
         └── ExtensionHost ── Wasmtime Provider Component（`yaqmc:provider@0.1.0`）
                               └── 由 WIT world 选定的 Host import
                                   精确 origin HTTPS · 私有存储/缓存 · 凭据句柄
@@ -49,6 +49,9 @@ ProviderRegistry
 - Component 只返回有界音源配方，Core 将其转成不透明 `Read + Seek` 源。签名 URL、header、缓存路径和凭据句柄
   不进入 renderer IPC；账号存储和凭据按 provider 实例隔离，不能覆盖内置 QQ 音乐账号。
 - `crates/yaqmc-core/src/storage.rs`：SQLite 与文件缓存索引。
+- “设置 → 存储”通过 Core 的 `app_cache_stats` / `app_clear_cache` 统一统计和清理所有平台的本机缓存，包括共享的
+  媒体/封面/元数据/歌词缓存，以及按命名空间去重的 Component 临时缓存文件；无需插件实现额外接口。
+  清理不会删除插件私有 KV、账号凭据、偏好设置、已安装插件或收听历史。后续缓存活动可能重新生成条目。
 
 ## 数据流
 

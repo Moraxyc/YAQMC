@@ -109,9 +109,19 @@ async function invokePlayerCommand(command: PlayerCommand): Promise<void> {
     case 'setShuffle':
       await client.player.setShuffle(command.enabled);
       return;
-    case 'setQuality':
-      await client.invoke('qqmusic_set_current_quality', { quality: command.quality });
+    case 'setQuality': {
+      const state = usePlayerStore.getState();
+      const reference = state.queue[state.currentIndex]?.provider;
+      if (!reference?.trackId.trim()) {
+        throw new Error('The current track has no music provider reference.');
+      }
+      await client.invoke('provider_set_current_quality', {
+        providerId: reference.providerId,
+        profileId: reference.profileId,
+        quality: command.quality,
+      });
       return;
+    }
     case 'cycleRepeat':
       await client.player.cycleRepeat();
       return;

@@ -141,6 +141,7 @@ impl fmt::Display for HostCommandRequestError {
 impl Error for HostCommandRequestError {}
 
 pub struct CoreHandle {
+    pub(crate) comment_requests: server::comment_requests::CommentRequests,
     config: CoreConfig,
     host_command_publisher: HostCommandPublisher,
     shutdown_state: watch::Sender<bool>,
@@ -181,6 +182,7 @@ impl CoreHandle {
 
     pub fn shutdown(&self) {
         if !self.is_shutdown.swap(true, Ordering::AcqRel) {
+            self.comment_requests.cancel_all();
             self.services.statistics.shutdown();
             self.shutdown_state.send_replace(true);
         }
@@ -259,6 +261,7 @@ pub fn bootstrap(
     let services = bootstrap::CoreServices::construct(&config, inputs)?;
 
     let handle = CoreHandle {
+        comment_requests: Default::default(),
         config,
         host_command_publisher,
         shutdown_state,

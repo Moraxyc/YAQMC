@@ -50,6 +50,7 @@ const publicDocuments = [
   'qqmusic-official-interoperability.md',
   'roadmap.md',
   'security.md',
+  'song-comments.md',
   'streaming.md',
   'windows-acceptance.md',
 ];
@@ -74,10 +75,6 @@ const communityDocuments = [
   'THIRD_PARTY_NOTICES.md',
   'docs/README.md',
   'docs/release/README.md',
-  'docs/release/provider-component-v3.md',
-  'docs/release/provider-readiness.md',
-  'docs/release/provenance.md',
-  'docs/release/qm-api-rs-provenance.md',
   'docs/zh-CN/README.md',
 ];
 

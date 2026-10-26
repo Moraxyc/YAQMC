@@ -1,5 +1,7 @@
 //! In-process Core runtime shared by protocol transports and native facades.
 
+#[cfg(feature = "plugins")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -19,6 +21,10 @@ use crate::CoreHandle;
 pub struct CoreRuntime<H> {
     core: Arc<CoreHandle>,
     host: Arc<H>,
+    #[cfg(feature = "plugins")]
+    plugin_events: Arc<dyn EventSink>,
+    #[cfg(feature = "plugins")]
+    plugin_event_sequence: AtomicU64,
 }
 
 impl<H> CoreRuntime<H>
@@ -56,11 +62,19 @@ where
             Arc::clone(&core),
             Arc::clone(&sink),
         );
-        spawn_host_command_fanout(&tokio::runtime::Handle::current(), host_commands, sink);
+        spawn_host_command_fanout(
+            &tokio::runtime::Handle::current(),
+            host_commands,
+            Arc::clone(&sink),
+        );
 
         Self {
             core,
             host: Arc::new(host),
+            #[cfg(feature = "plugins")]
+            plugin_events: sink,
+            #[cfg(feature = "plugins")]
+            plugin_event_sequence: AtomicU64::new(0),
         }
     }
 
@@ -79,6 +93,12 @@ where
         method: &str,
         params: Option<Value>,
     ) -> ResponseBody {
+        #[cfg(feature = "plugins")]
+        let plugin_id = params
+            .as_ref()
+            .and_then(|params| params.get("request").unwrap_or(params).get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         match dispatch(
             self.core.as_ref(),
             self.host.as_ref(),
@@ -88,8 +108,59 @@ where
         )
         .await
         {
-            Ok(value) => ResponseBody::success(value),
+            Ok(value) => {
+                #[cfg(feature = "plugins")]
+                self.emit_plugin_mutation(method, plugin_id.as_deref(), &value);
+                ResponseBody::success(value)
+            }
             Err(error) => ResponseBody::failure(error.into_core_error()),
+        }
+    }
+
+    #[cfg(feature = "plugins")]
+    fn emit_plugin_mutation(&self, method: &str, plugin_id: Option<&str>, result: &Value) {
+        let changes: Vec<(String, bool)> = match method {
+            "plugin_install"
+            | "plugin_install_from"
+            | "plugin_install_unpacked"
+            | "plugin_set_enabled"
+            | "plugin_reload"
+            | "plugin_mark_failed" => result
+                .get("id")
+                .and_then(Value::as_str)
+                .zip(result.get("enabled").and_then(Value::as_bool))
+                .map(|(id, enabled)| (id.to_owned(), enabled))
+                .into_iter()
+                .collect(),
+            "plugin_settings_set" => self
+                .core
+                .plugins()
+                .list()
+                .into_iter()
+                .find(|record| Some(record.id.as_str()) == plugin_id)
+                .map(|record| (record.id, record.enabled))
+                .into_iter()
+                .collect(),
+            "plugin_uninstall" => plugin_id
+                .map(|id| (id.to_owned(), false))
+                .into_iter()
+                .collect(),
+            "plugin_set_safe_mode" | "plugin_set_developer_mode" => self
+                .core
+                .plugins()
+                .list()
+                .into_iter()
+                .map(|record| (record.id, record.enabled))
+                .collect(),
+            _ => return,
+        };
+        for (plugin_id, enabled) in changes {
+            let sequence = self.plugin_event_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+            self.plugin_events.emit(
+                sequence,
+                yaqmc_protocol::CHANNEL_PLUGIN_CHANGED,
+                &serde_json::json!({ "pluginId": plugin_id, "enabled": enabled }),
+            );
         }
     }
 

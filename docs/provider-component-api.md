@@ -28,6 +28,7 @@ and a Component can call only the imports present in its selected WIT world.
 | `provider.playback`       | resolve, client fallback, quality selection             | Accepts only an opaque managed-cache or exact-origin HTTPS recipe; Core streams it.  |
 | `provider.recommendation` | next continuation batch                                 | Fences results by provider/account generation and discards stale responses.          |
 | `provider.lyrics`         | normalized lyric document                               | Validates bounded line/word timing and degrades independently.                       |
+| `provider.comments`       | read-only song comments and replies                     | Renders a shared comment drawer and lyrics overlay; validates bounded pages.         |
 | `provider.account`        | login, snapshot, library, favorites, playlist mutations | Binds state, cancellation, storage, and credential handles to one provider instance. |
 
 The JSON fixture is the complete list of operation names. An implementation may return a sanitized
@@ -41,6 +42,7 @@ Frozen operations:
 - `provider.playback`: `playback.resolve`, `playback.resolve-client-fallback`,
   `playback.set-preferred-quality`, `playback.set-current-quality`.
 - `provider.recommendation`: `recommendation.next`; `provider.lyrics`: `lyrics.get`.
+- `provider.comments`: `comments.list`. See [Song comments](song-comments.md) for request/response, pagination, legacy compatibility and lifecycle.
 - `provider.account`: `account.snapshot`, `account.restore-session`, `account.sign-out`, account library/playlist
   reads and mutations, plus the `account.auth.*` QR/OAuth lifecycle. The fixture is authoritative for every exact
   account operation name.

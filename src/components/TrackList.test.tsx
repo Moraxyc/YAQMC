@@ -71,6 +71,19 @@ describe('TrackList favorite controls', () => {
     usePlayerStore.setState(initialPlayerState);
   });
 
+  it.each([
+    [{ status: 'entitlement-required', requiredTier: 'music-vip' }, 'VIP track'],
+    [{ status: 'entitlement-required', requiredTier: 'purchase' }, 'Paid album'],
+    [{ status: 'unavailable', reason: 'copyright-restricted' }, 'Licensing restriction'],
+  ] as const)(
+    'shows catalog restrictions without treating them as a login failure',
+    (availability, label) => {
+      useAccountStore.setState({ snapshot: authenticatedSnapshot() });
+      render(<TrackList tracks={[{ ...qqTrack(), availability }]} />);
+      expect(screen.getByText(label)).toBeVisible();
+    },
+  );
+
   it('uses sibling play and favorite buttons without nested interactive elements', async () => {
     const track = qqTrack();
     const originalFavorite = track.isFavorite;

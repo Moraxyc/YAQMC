@@ -350,3 +350,157 @@ fn cargo_defines_the_yaqmc_core_stdio_binary() {
     assert!(manifest.contains("path = \"src/bin/yaqmc-core.rs\""));
     let _bin = include_str!("../src/bin/yaqmc-core.rs");
 }
+
+#[cfg(feature = "plugins")]
+#[tokio::test]
+async fn successful_plugin_mutations_emit_scoped_changes_without_settings_values() {
+    let (root, core, host) = boot();
+    let plugin_id = "org.example.notifications";
+    let directory = root.path().join("notification-plugin");
+    std::fs::create_dir_all(directory.join("styles")).expect("style directory");
+    std::fs::write(
+        directory.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifestVersion": 1,
+            "id": plugin_id,
+            "name": "Notification fixture",
+            "version": "1.0.0",
+            "apiVersion": 1,
+            "entrypoints": { "styles": ["styles/main.css"] },
+            "permissions": ["style.register"],
+            "settingsSchema": { "fields": [
+                { "id": "mode", "type": "select", "options": ["isolated", "aggregate"], "default": "isolated" },
+                { "id": "secret", "type": "password", "default": "" }
+            ] }
+        }))
+        .expect("fixture manifest"),
+    )
+    .expect("write fixture manifest");
+    std::fs::write(
+        directory.join("styles/main.css"),
+        "[data-yaqmc=\"player-bar\"]{border-radius:8px}",
+    )
+    .expect("write style");
+    core.plugins()
+        .set_developer_mode(true)
+        .expect("developer mode");
+    let (mut host_transport, core_transport) = duplex_pair();
+    let server = tokio::spawn(async move { serve_protocol(core, host, core_transport).await });
+    host_handshake(
+        &mut host_transport,
+        attach_message(),
+        Some(env!("CARGO_PKG_VERSION")),
+    )
+    .await
+    .expect("host handshake");
+
+    let writes = [
+        (
+            "plugin_install_unpacked",
+            json!({ "request": { "path": directory.to_string_lossy(), "grant": ["style.register"], "enable": true } }),
+            true,
+        ),
+        (
+            "plugin_settings_set",
+            json!({ "request": { "id": plugin_id, "values": { "mode": "aggregate", "secret": "fixture-only-secret" } } }),
+            true,
+        ),
+        (
+            "plugin_set_enabled",
+            json!({ "request": { "id": plugin_id, "enabled": false, "grant": [] } }),
+            false,
+        ),
+        (
+            "plugin_uninstall",
+            json!({ "request": { "id": plugin_id, "removeData": true } }),
+            false,
+        ),
+    ];
+    for (index, (method, params, enabled)) in writes.into_iter().enumerate() {
+        let request_id = 100 + index as u64;
+        host_transport
+            .send(&CoreMessage::Request {
+                id: request_id,
+                method: method.to_owned(),
+                params: Some(params),
+                origin: Some(WindowOrigin::Main),
+            })
+            .await
+            .expect("plugin mutation request");
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut saw_event = false;
+            let mut saw_response = false;
+            while !saw_event || !saw_response {
+                match host_transport.recv().await.expect("mutation message") {
+                    CoreMessage::Event {
+                        channel, payload, ..
+                    } if channel == yaqmc_protocol::CHANNEL_PLUGIN_CHANGED => {
+                        assert_eq!(
+                            payload,
+                            json!({ "pluginId": plugin_id, "enabled": enabled })
+                        );
+                        saw_event = true;
+                    }
+                    CoreMessage::Response { id, body } => {
+                        assert_eq!(id, request_id);
+                        assert!(
+                            matches!(body, ResponseBody::Success { .. }),
+                            "{method}: {body:?}"
+                        );
+                        saw_response = true;
+                    }
+                    CoreMessage::Event { .. } => {}
+                    other => panic!("unexpected mutation message {other:?}"),
+                }
+            }
+        })
+        .await;
+        assert!(received.is_ok(), "{method} must emit plugin://changed");
+    }
+
+    host_transport
+        .send(&CoreMessage::Request {
+            id: 200,
+            method: "plugin_settings_set".to_owned(),
+            params: Some(
+                json!({ "request": { "id": plugin_id, "values": { "mode": "aggregate" } } }),
+            ),
+            origin: Some(WindowOrigin::Main),
+        })
+        .await
+        .expect("uninstalled plugin request");
+    loop {
+        match host_transport
+            .recv()
+            .await
+            .expect("rejected mutation message")
+        {
+            CoreMessage::Response {
+                id: 200,
+                body: ResponseBody::Failure { .. },
+            } => break,
+            CoreMessage::Event { channel, .. } => {
+                assert_ne!(channel, yaqmc_protocol::CHANNEL_PLUGIN_CHANGED);
+            }
+            other => panic!("expected failed mutation, got {other:?}"),
+        }
+    }
+    let rejected_event = tokio::time::timeout(std::time::Duration::from_millis(100), async {
+        loop {
+            if let CoreMessage::Event { channel, .. } = host_transport.recv().await.expect("event")
+            {
+                if channel == yaqmc_protocol::CHANNEL_PLUGIN_CHANGED {
+                    break;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(
+        rejected_event.is_err(),
+        "failed mutations must not emit a change"
+    );
+
+    drop(host_transport);
+    server.await.expect("server task").expect("EOF shutdown");
+}

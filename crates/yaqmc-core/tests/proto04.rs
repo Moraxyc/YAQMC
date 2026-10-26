@@ -11,6 +11,7 @@ use yaqmc_core::{bootstrap, CoreBootstrapInputs, CoreConfig, CoreHandle, CorePat
 use yaqmc_protocol::{
     methods, ErrorCode, MethodOwner, WindowOrigin, CHANNEL_PROVIDER_PROFILES_CHANGED,
 };
+use yaqmc_provider_api::{CommentSort, CommentsProvider, SongCommentsPage, SongCommentsRequest};
 use yaqmc_provider_api::{
     LyricDocument, LyricMetadata, LyricSyncMode, LyricsProvider, ProviderCapabilities,
     ProviderResult, RecommendationBatch, RecommendationProvider, RecommendationRequest,
@@ -27,6 +28,34 @@ struct ScopedLyricsProvider {
 
 struct ScopedRecommendationProvider {
     profile_id: &'static str,
+}
+
+#[async_trait]
+impl CommentsProvider for ScopedLyricsProvider {
+    async fn song_comments(
+        &self,
+        request: SongCommentsRequest,
+    ) -> ProviderResult<SongCommentsPage> {
+        assert_eq!(request.song_id, "song-1");
+        if request.parent_id.as_deref() == Some("wait") {
+            std::future::pending::<()>().await;
+        }
+        Ok(SongCommentsPage {
+            items: (0..21)
+                .map(|i| {
+                    serde_json::from_value(json!({
+                        "id":format!("{}-{i}", self.profile_id), "content":"comment",
+                        "author":"listener", "likedCount":0
+                    }))
+                    .unwrap()
+                })
+                .collect(),
+            next_cursor: Some(self.profile_id.to_owned()),
+            total: Some(1000),
+            supported_sorts: vec![CommentSort::Hot, CommentSort::New],
+            replies_supported: true,
+        })
+    }
 }
 
 #[async_trait]
@@ -48,7 +77,11 @@ impl ShareProvider for ScopedShareProvider {
 #[async_trait]
 impl LyricsProvider for ScopedLyricsProvider {
     async fn lyrics_for_song(&self, song_id: String) -> ProviderResult<Option<LyricDocument>> {
+        if song_id == "wait" {
+            std::future::pending::<()>().await;
+        }
         Ok(Some(LyricDocument {
+            comments: Vec::new(),
             song_id,
             sync_mode: LyricSyncMode::Unsynchronized,
             metadata: LyricMetadata {
@@ -81,6 +114,7 @@ fn share_capabilities(profile_id: &'static str) -> ProviderCapabilities {
     ProviderCapabilities {
         share: Some(Arc::new(ScopedShareProvider { profile_id })),
         lyrics: Some(Arc::new(ScopedLyricsProvider { profile_id })),
+        comments: Some(Arc::new(ScopedLyricsProvider { profile_id })),
         recommendations: Some(Arc::new(ScopedRecommendationProvider { profile_id })),
         ..ProviderCapabilities::default()
     }
@@ -141,6 +175,77 @@ fn boot() -> (
         download_dir: root.path().join("downloads"),
     };
     (root, runtime, handle, host)
+}
+
+#[test]
+fn app_cache_dispatch_is_independent_of_the_selected_provider_and_preserves_settings() {
+    let (_root, runtime, core, host) = boot();
+    core.providers()
+        .register_capabilities("fake", share_capabilities("default"))
+        .unwrap();
+    core.storage()
+        .set_setting("ui-preferences-v1", "retained")
+        .unwrap();
+    core.storage()
+        .put_json(
+            "fixture-metadata",
+            "metadata",
+            &json!({"title":"fixture"}),
+            60_000,
+        )
+        .unwrap();
+    let cache = core
+        .config()
+        .paths
+        .cache_dir
+        .join("plugin-components")
+        .join("a".repeat(64));
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(
+        cache.join(format!("{}.cache", "b".repeat(64))),
+        b"fixture-cache",
+    )
+    .unwrap();
+    runtime.block_on(async {
+        assert!(dispatch(
+            &core,
+            &host,
+            WindowOrigin::Main,
+            "provider_cache_stats",
+            Some(json!({"providerId":"fake"}))
+        )
+        .await
+        .is_err());
+        let before = dispatch(&core, &host, WindowOrigin::Main, "app_cache_stats", None)
+            .await
+            .unwrap();
+        assert_eq!(before["metadataEntries"], 1);
+        assert_eq!(before["componentEntries"], 1);
+        assert_eq!(before["componentBytes"], 13);
+        assert_eq!(before["totalBytes"], 13);
+        let after = dispatch(&core, &host, WindowOrigin::Main, "app_clear_cache", None)
+            .await
+            .unwrap();
+        assert_eq!(after["metadataEntries"], 0);
+        assert_eq!(after["componentEntries"], 0);
+        assert_eq!(after["totalBytes"], 0);
+        assert_eq!(
+            core.storage()
+                .get_setting("ui-preferences-v1")
+                .unwrap()
+                .as_deref(),
+            Some("retained")
+        );
+        assert!(core.providers().contains("fake"));
+        assert!(!cache.join(format!("{}.cache", "b".repeat(64))).exists());
+        for method in ["app_cache_stats", "app_clear_cache"] {
+            assert!(
+                dispatch(&core, &host, WindowOrigin::LyricsDesktop, method, None)
+                    .await
+                    .is_err()
+            );
+        }
+    });
 }
 
 #[test]
@@ -480,6 +585,33 @@ fn generic_provider_dispatch_selects_the_exact_default_or_work_profile() {
         .expect("register fake work profile");
 
     runtime.block_on(async {
+        for profile_id in ["default", "work"] {
+            let params = json!({"providerId":"fake", "profileId":profile_id,
+                "request":{"songId":"song-1", "sort":"hot", "limit":20}});
+            let result = dispatch(
+                &core,
+                &host,
+                WindowOrigin::Main,
+                "provider_comments",
+                Some(params.clone()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["nextCursor"], profile_id);
+            assert_eq!(result["items"].as_array().unwrap().len(), 21);
+            assert_eq!(result["items"][20]["id"], format!("{profile_id}-20"));
+            let mut invalid = params;
+            invalid["request"]["limit"] = json!(51);
+            assert!(dispatch(
+                &core,
+                &host,
+                WindowOrigin::Main,
+                "provider_comments",
+                Some(invalid)
+            )
+            .await
+            .is_err());
+        }
         for (params, expected_profile) in [
             (json!({ "providerId": "fake", "id": "song-1" }), "default"),
             (
@@ -615,6 +747,97 @@ fn generic_provider_dispatch_selects_the_exact_default_or_work_profile() {
         assert!(error
             .message
             .contains("does not match the requested profile"));
+    });
+}
+
+#[test]
+fn comments_cancel_interrupts_a_pending_read_and_preserves_scope_acl() {
+    let (_root, runtime, core, host) = boot();
+    core.providers()
+        .register_capabilities("fake", share_capabilities("default"))
+        .unwrap();
+    runtime.block_on(async {
+        let request = json!({"providerId":"fake","requestId":"pending-read",
+            "request":{"songId":"song-1","sort":"hot","limit":20,"parentId":"wait"}});
+        let read = dispatch(
+            &core,
+            &host,
+            WindowOrigin::Main,
+            "provider_comments",
+            Some(request),
+        );
+        let cancel = async {
+            tokio::task::yield_now().await;
+            let params = Some(json!({"providerId":"fake","requestId":"pending-read"}));
+            assert!(dispatch(
+                &core,
+                &host,
+                WindowOrigin::LyricsDesktop,
+                "provider_comments_cancel",
+                params.clone()
+            )
+            .await
+            .is_err());
+            dispatch(
+                &core,
+                &host,
+                WindowOrigin::Main,
+                "provider_comments_cancel",
+                params,
+            )
+            .await
+            .unwrap();
+        };
+        let (result, _) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(read, cancel)
+        })
+        .await
+        .expect("pending provider read was not cancelled");
+        assert!(result.is_err());
+        assert!(dispatch(
+            &core,
+            &host,
+            WindowOrigin::Main,
+            "provider_comments_cancel",
+            Some(json!({"providerId":"fake","profileId":"missing","requestId":"pending-read"}))
+        )
+        .await
+        .is_err());
+    });
+}
+
+#[test]
+fn comments_cancel_also_stops_legacy_lyric_fallback_reads() {
+    let (_root, runtime, core, host) = boot();
+    core.providers()
+        .register_capabilities("fake", share_capabilities("default"))
+        .unwrap();
+    runtime.block_on(async {
+        let read = dispatch(
+            &core,
+            &host,
+            WindowOrigin::Main,
+            "provider_lyrics",
+            Some(json!({"providerId":"fake","requestId":"legacy-read","id":"wait"})),
+        );
+        let cancel = async {
+            tokio::task::yield_now().await;
+            dispatch(
+                &core,
+                &host,
+                WindowOrigin::Main,
+                "provider_comments_cancel",
+                Some(json!({"providerId":"fake","requestId":"legacy-read"})),
+            )
+            .await
+            .unwrap();
+        };
+        let (result, _) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(read, cancel)
+        })
+        .await
+        .expect("legacy lyric read was not cancelled");
+        assert!(result.is_err());
     });
 }
 

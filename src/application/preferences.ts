@@ -81,6 +81,8 @@ export const LYRIC_FONT_WEIGHTS = ['400', '500', '600', '700', '800', '900'] as 
 export type LyricFontWeight = (typeof LYRIC_FONT_WEIGHTS)[number];
 
 export interface LyricDisplaySettings {
+  commentDanmaku: boolean;
+  chineseScript: 'original' | 'traditional';
   translation: SecondaryLyricVisibility;
   romanization: SecondaryLyricVisibility;
   timingOffsetMs: number;
@@ -107,6 +109,7 @@ export interface LyricSurfaceSettings {
   hideInFullscreen: boolean;
   lineMode: SurfaceLineMode;
   fontSize: number;
+  secondaryFontSize: number;
   fontMode: FontMode;
   customFontFamily: string;
   alignment: SurfaceAlignment;
@@ -139,6 +142,7 @@ const defaultSurface = (kind: SurfaceKind): LyricSurfaceSettings => ({
   hideInFullscreen: true,
   lineMode: kind === 'island' ? 'single' : 'double',
   fontSize: kind === 'desktop' ? 30 : 17,
+  secondaryFontSize: kind === 'desktop' ? 15.6 : 8.84,
   fontMode: 'system',
   customFontFamily: '',
   alignment: 'center',
@@ -169,6 +173,8 @@ export const defaultPreferences: AppPreferences = {
     material: 'opaque',
   },
   lyrics: {
+    commentDanmaku: true,
+    chineseScript: 'original',
     translation: 'auto',
     romanization: 'auto',
     timingOffsetMs: 0,
@@ -245,6 +251,18 @@ function normalizeSurface(
         : fallback.hideInFullscreen,
     lineMode: valueIn(source.lineMode, ['single', 'double'], fallback.lineMode),
     fontSize: numberInRange(source.fontSize, fallback.fontSize, 12, 64),
+    secondaryFontSize: numberInRange(
+      source.secondaryFontSize,
+      Math.min(
+        kind === 'desktop' ? 48 : 24,
+        Math.max(
+          8,
+          Math.round(numberInRange(source.fontSize, fallback.fontSize, 12, 64) * 52) / 100,
+        ),
+      ),
+      8,
+      kind === 'desktop' ? 48 : 24,
+    ),
     fontMode: valueIn(source.fontMode, ['system', 'application', 'custom'], fallback.fontMode),
     customFontFamily:
       typeof source.customFontFamily === 'string'
@@ -337,7 +355,9 @@ export function normalizePreferences(value: unknown): AppPreferences {
       material: valueIn(appearance.material, ['opaque', 'translucent'], 'opaque'),
     },
     lyrics: {
+      commentDanmaku: typeof lyrics.commentDanmaku === 'boolean' ? lyrics.commentDanmaku : true,
       translation: valueIn(lyrics.translation, ['auto', 'show', 'hide'], 'auto'),
+      chineseScript: valueIn(lyrics.chineseScript, ['original', 'traditional'], 'original'),
       romanization: valueIn(lyrics.romanization, ['auto', 'show', 'hide'], 'auto'),
       timingOffsetMs: numberInRange(lyrics.timingOffsetMs, 0, -2_000, 2_000),
       fontSize: valueIn(lyrics.fontSize, ['small', 'medium', 'large'], 'medium'),

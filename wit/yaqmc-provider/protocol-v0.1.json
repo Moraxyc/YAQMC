@@ -12,7 +12,7 @@
     "provider-storage": ["utilities", "storage"],
     "provider-network": ["utilities", "network"],
     "provider-network-storage": ["utilities", "storage", "network"],
-    "provider-account": ["utilities", "storage", "network", "credentials"]
+    "provider-account": ["utilities", "storage", "network", "credentials", "settings"]
   },
   "capabilities": {
     "provider.catalog": {
@@ -27,7 +27,8 @@
         "catalog.home",
         "catalog.playlist",
         "catalog.search",
-        "catalog.song"
+        "catalog.song",
+        "catalog.status"
       ]
     },
     "provider.playback": {
@@ -46,6 +47,10 @@
     "provider.lyrics": {
       "sensitive": false,
       "operations": ["lyrics.get"]
+    },
+    "provider.comments": {
+      "sensitive": false,
+      "operations": ["comments.list"]
     },
     "provider.account": {
       "sensitive": true,
@@ -102,10 +107,18 @@
       "request": {
         "capability": "provider.playback",
         "operation": "playback.resolve",
-        "payload": { "song": { "id": "example-song", "quality": "lossless" } }
+        "payload": {
+          "song": {
+            "id": "example-song",
+            "quality": "lossless"
+          }
+        }
       },
       "response": {
-        "source": { "kind": "cache", "key": "example-audio-v1" },
+        "source": {
+          "kind": "cache",
+          "key": "example-audio-v1"
+        },
         "cacheKey": "example-song:standard",
         "format": "wav",
         "mimeType": "audio/wav",
@@ -125,22 +138,61 @@
       "request": {
         "capability": "provider.recommendation",
         "operation": "recommendation.next",
-        "payload": { "seedSongId": "example-song", "cursor": null }
+        "payload": {
+          "seedSongId": "example-song",
+          "cursor": null
+        }
       },
-      "response": { "songs": [], "nextCursor": null, "ended": true }
+      "response": {
+        "songs": [],
+        "nextCursor": null,
+        "ended": true
+      }
     },
     {
       "request": {
         "capability": "provider.lyrics",
         "operation": "lyrics.get",
-        "payload": { "songId": "example-song" }
+        "payload": {
+          "songId": "example-song"
+        }
       },
       "response": {
         "songId": "example-song",
         "syncMode": "unsynchronized",
-        "metadata": { "sourceLabel": "Provider Component example", "offsetMs": 0 },
+        "metadata": {
+          "sourceLabel": "Provider Component example",
+          "offsetMs": 0
+        },
         "vocalists": [],
         "lines": []
+      }
+    },
+    {
+      "request": {
+        "capability": "provider.comments",
+        "operation": "comments.list",
+        "payload": {
+          "songId": "example-song",
+          "sort": "hot",
+          "cursor": null,
+          "limit": 20,
+          "parentId": null
+        }
+      },
+      "response": {
+        "items": [
+          {
+            "id": "comment-1",
+            "author": "Listener",
+            "content": "A comment",
+            "likedCount": 1
+          }
+        ],
+        "nextCursor": null,
+        "total": 1,
+        "supportedSorts": ["hot", "new"],
+        "repliesSupported": false
       }
     },
     {
@@ -149,7 +201,11 @@
         "operation": "account.snapshot",
         "payload": {}
       },
-      "response": { "state": "guest", "profile": null, "entitlement": null }
+      "response": {
+        "state": "guest",
+        "profile": null,
+        "entitlement": null
+      }
     }
   ],
   "sampleErrors": [

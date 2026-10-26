@@ -1503,6 +1503,7 @@ mod tests {
         player.hydrate_queue(vec![song("one", 10_000)]).await;
         player
             .set_lyrics(Some(LyricDocument {
+                comments: Vec::new(),
                 song_id: "one".to_owned(),
                 sync_mode: LyricSyncMode::Word,
                 metadata: LyricMetadata {

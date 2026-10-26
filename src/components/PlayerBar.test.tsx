@@ -102,6 +102,25 @@ describe('PlayerBar lyrics presentation entry', () => {
     expect(commands).toEqual([{ type: 'setQuality', quality: 'hi-res' }]);
   });
 
+  it.each(['plugin.netease', 'plugin.kugou'])(
+    'allows scoped %s current-track quality selection',
+    (providerId) => {
+      const commands: unknown[] = [];
+      setPlayerCommandAdapter(async (command) => {
+        commands.push(command);
+      });
+      const song = qqTrack();
+      song.provider.providerId = providerId;
+      usePlayerStore.setState({ queue: [song], currentIndex: 0 });
+      render(<PlayerBar />);
+      const quality = screen.getByRole('combobox', { name: 'Audio quality for the current track' });
+      expect(quality).not.toBeDisabled();
+      fireEvent.click(quality);
+      fireEvent.click(screen.getByRole('option', { name: 'High' }));
+      expect(commands).toEqual([{ type: 'setQuality', quality: 'high' }]);
+    },
+  );
+
   it('maps the three quality capability axes and prevents unsupported selection', () => {
     const commands: unknown[] = [];
     setPlayerCommandAdapter(async (command) => {
@@ -484,6 +503,60 @@ describe('PlayerBar lyrics presentation entry', () => {
       );
     },
   );
+
+  it.each([
+    [
+      'membership-required',
+      'Membership track: the platform did not grant this account playback access.',
+    ],
+    ['purchase-required', 'This account must purchase the song or album separately.'],
+    ['copyright-restricted', 'Licensing or region restrictions prevent playback on this platform.'],
+    ['provider-playback-unsupported', 'The music plugin does not support this playback method.'],
+    [
+      'provider-unavailable',
+      'The music plugin is unavailable; check that it is enabled, configured and permitted.',
+    ],
+    [
+      'provider-playback-failed',
+      'The music plugin could not resolve a valid source; update it or try again.',
+    ],
+    [
+      'media-url-unavailable',
+      'The platform returned no playback source; the reason is unconfirmed.',
+    ],
+    ['authentication-expired', 'The current music platform session expired; sign in again.'],
+  ])('shows the specific %s failure even when the account is logged in', (code, copy) => {
+    useAccountStore.setState({ snapshot: authenticatedSnapshot() });
+    usePlayerStore.setState({
+      queue: [qqTrack()],
+      currentIndex: 0,
+      playbackState: 'fatal-error',
+      playbackError: {
+        code,
+        message: 'secret https://signed.invalid/?token=secret',
+        retryable: false,
+      },
+    });
+    render(<PlayerBar />);
+    expect(screen.getByRole('status')).toHaveTextContent(copy);
+    expect(screen.getByRole('status')).toHaveAttribute('title', copy);
+    expect(screen.queryByText(/token=secret/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['zh-CN', 'membership-required', '会员曲目：平台未授予当前账号播放权限。'],
+    ['zh-TW', 'copyright-restricted', '版權或地區限制：目前平台不允許播放這首曲目。'],
+  ])('localizes %s playback restrictions', async (language, code, copy) => {
+    await i18n.changeLanguage(language);
+    usePlayerStore.setState({
+      queue: [qqTrack()],
+      currentIndex: 0,
+      playbackState: 'fatal-error',
+      playbackError: { code, message: 'ignored', retryable: false },
+    });
+    render(<PlayerBar />);
+    expect(screen.getByRole('status')).toHaveTextContent(copy);
+  });
 
   it('shows preview progress from Core playback duration, not the full-song catalog length', () => {
     const track = {

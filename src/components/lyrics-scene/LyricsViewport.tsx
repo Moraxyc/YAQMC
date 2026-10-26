@@ -21,6 +21,12 @@ import type {
 import { isAndroidRuntime } from '../../application/host-capabilities';
 import { useLyricsStageStore } from '../../application/lyrics-stage-machine';
 import { usePlayerStore } from '../../application/player-store';
+import { useLyricTextScript } from '../../application/use-lyric-text-script';
+import { presentLyricLine } from '../../application/lyrics-text';
+import {
+  installWordAnimation,
+  type LyricWordAnimation,
+} from '../../application/lyrics-word-animation';
 import type { LyricDocument } from '../../domain/music';
 
 import '@applemusic-like-lyrics/core/style.css';
@@ -134,9 +140,14 @@ function StaticLyrics({
   seek: (positionMs: number) => void;
   presentationOffsetMs: number;
 }) {
+  const chineseScript = useLyricTextScript();
+  const lines = useMemo(
+    () => document.lines.map((line) => presentLyricLine(line, chineseScript)),
+    [chineseScript, document],
+  );
   return (
     <div className="lyrics-stage__amll-static" data-align={align} style={{ textAlign: align }}>
-      {document.lines.map((line) => (
+      {lines.map((line) => (
         <button
           key={line.id}
           type="button"
@@ -167,6 +178,7 @@ export function LyricsViewport({
   translation,
   romanization,
   wordEffect,
+  wordAnimation,
   amll,
   followAnchor,
   align,
@@ -186,6 +198,7 @@ export function LyricsViewport({
   translation: SecondaryLyricVisibility;
   romanization: SecondaryLyricVisibility;
   wordEffect: LyricWordEffect;
+  wordAnimation?: LyricWordAnimation;
   amll: AmllSettings;
   followAnchor: number;
   align: 'left' | 'center' | 'right';
@@ -208,18 +221,28 @@ export function LyricsViewport({
     timelineRevision,
     isPlaying,
   );
+  const chineseScript = useLyricTextScript();
   const model = useMemo(
-    () => (document ? buildLyricsRenderModel(document, translation, romanization) : null),
-    [document, romanization, translation],
+    () =>
+      document ? buildLyricsRenderModel(document, translation, romanization, chineseScript) : null,
+    [chineseScript, document, romanization, translation],
   );
   const amllLines = useMemo(() => model?.lines.map(toAmllLyricLine) ?? [], [model]);
   const isAndroid = isAndroidRuntime();
   const nativeContainerRef = useRef<HTMLDivElement>(null);
   const stage = useLyricsStageStore((s) => s.stage);
   const nativeShownRef = useRef(false);
+  const wordAnimationRoot = useRef<HTMLDivElement>(null);
+  const useNativeOverlay = isAndroid && !editorGesture && !wordAnimation;
 
   useEffect(() => {
-    if (!isAndroid || editorGesture) return;
+    const root = wordAnimationRoot.current;
+    if (!root || !wordAnimation || wordEffect !== 'jump' || reducedMotion) return;
+    return installWordAnimation(root, wordAnimation);
+  }, [wordAnimation, wordEffect, reducedMotion, document, status]);
+
+  useEffect(() => {
+    if (!useNativeOverlay) return;
 
     if (
       status !== 'ready' ||
@@ -316,6 +339,7 @@ export function LyricsViewport({
     };
   }, [
     isAndroid,
+    useNativeOverlay,
     editorGesture,
     stage,
     status,
@@ -357,7 +381,7 @@ export function LyricsViewport({
     );
   }
 
-  if (isAndroid && !editorGesture) {
+  if (useNativeOverlay) {
     return (
       <div
         ref={nativeContainerRef}
@@ -376,16 +400,23 @@ export function LyricsViewport({
     seek(Math.max(0, sourceLine.startMs + document.metadata.offsetMs - presentationOffsetMs));
   };
 
+  // Recreate AMLL's paused word effects on a motion preference change, while
+  // the parent retains the current lyric time and playback session.
+  const motionKey = wordEffect === 'jump' && !reducedMotion ? 'motion' : 'still';
+
   return (
     <div
+      ref={wordAnimationRoot}
       className="lyrics-stage__amll"
+      data-yaqmc="lyrics-viewport"
       data-align={align}
       data-follow="active"
-      data-word-jump={wordEffect === 'jump' ? 'true' : 'false'}
+      data-word-jump={wordEffect === 'jump' && !reducedMotion ? 'true' : 'false'}
+      data-word-animation={wordAnimation ? 'custom' : 'default'}
     >
       <LyricPlayer
+        key={motionKey}
         className="lyrics-stage__amll-player"
-        disabled={editorGesture}
         lyricLines={amllLines}
         currentTime={currentTime}
         isSeeking={false}

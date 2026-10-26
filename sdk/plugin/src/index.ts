@@ -26,6 +26,36 @@ export type PluginPermission =
 export type FuturePluginPermission =
   'network' | 'filesystem' | 'provider' | 'account' | 'native' | 'shell';
 
+/** API v3 Wasm capability, declared in both provider.capabilities and permissions.
+ * invoke("provider.comments", "comments.list", JSON.stringify(request))
+ * The host renders the drawer and lyrics overlay; this capability is read-only.
+ */
+export type PluginCommentSort = 'hot' | 'new';
+export interface PluginSongCommentsRequest {
+  songId: string;
+  sort: PluginCommentSort;
+  cursor?: string | null;
+  limit: number;
+  parentId?: string | null;
+}
+export interface PluginSongComment {
+  id: string;
+  content: string;
+  author: string;
+  likedCount: number;
+  avatarUrl?: string | null;
+  timeMs?: number | null;
+  replyCount?: number | null;
+  replyTo?: { author: string; content: string } | null;
+}
+export interface PluginSongCommentsPage {
+  items: PluginSongComment[];
+  nextCursor: string | null;
+  total: number | null;
+  supportedSorts: PluginCommentSort[];
+  repliesSupported: boolean;
+}
+
 export type PluginEventName =
   | 'track.changed'
   | 'playback.stateChanged'
@@ -81,6 +111,18 @@ export interface PluginLyricsSnapshot {
   }>;
   currentLine?: number | null;
   positionMs?: number;
+}
+
+/** Declarative scene.lyrics.wordAnimation; the host owns timing and playback. */
+export interface PluginLyricWordAnimation {
+  easing?: 'linear' | 'ease-out' | 'ease-in-out';
+  keyframes: Array<{
+    offset: number;
+    y?: number;
+    scale?: number;
+    rotate?: number;
+    glow?: number;
+  }>;
 }
 
 export interface PluginStorage {

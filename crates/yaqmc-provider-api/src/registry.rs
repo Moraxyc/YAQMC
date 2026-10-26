@@ -1,5 +1,6 @@
 //! Runtime-ID provider registry and legacy capability façade.
 
+use crate::CommentsProvider;
 use crate::{
     AccountLoginFlow, AccountLoginMethodDescriptor, AccountPlaylistDetail, AccountPlaylistSummary,
     AccountProvider, AccountSnapshot, AccountState, Album, AreaFeed, Artist, ArtistCatalogKind,
@@ -32,6 +33,8 @@ pub struct ProviderCapabilitySummary {
     pub playback: bool,
     pub recommendations: bool,
     pub lyrics: bool,
+    #[serde(default)]
+    pub comments: bool,
     pub share: bool,
     pub account: bool,
 }
@@ -634,6 +637,33 @@ impl ProviderAccount for LegacyCapabilityAdapter {
 }
 
 #[async_trait]
+impl CommentsProvider for LegacyCapabilityAdapter {
+    async fn song_comments(
+        &self,
+        request: crate::SongCommentsRequest,
+    ) -> ProviderResult<crate::SongCommentsPage> {
+        self.song_comments_with_cancellation(request, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    async fn song_comments_with_cancellation(
+        &self,
+        request: crate::SongCommentsRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> ProviderResult<crate::SongCommentsPage> {
+        request.validate()?;
+        self.provider
+            .comments_provider()
+            .ok_or_else(|| {
+                ProviderCommandError::invalid_request("provider comments are unavailable")
+            })?
+            .song_comments_with_cancellation(request, cancellation)
+            .await?
+            .bounded()
+    }
+}
+
+#[async_trait]
 impl ShareProvider for LegacyCapabilityAdapter {
     async fn share_song(&self, id: String) -> ProviderResult<ShareTarget> {
         self.provider
@@ -689,9 +719,8 @@ impl AccountProvider for LegacyCapabilityAdapter {
 
 /// Capability view over the current monolithic provider contract.
 ///
-/// Every view is present for a legacy provider. Future provider instances can
-/// make capabilities optional without forcing existing Core consumers to move
-/// in one change.
+/// Existing legacy views remain present; comments are advertised only when the
+/// legacy implementation supplies the optional capability.
 #[derive(Default)]
 pub struct ProviderCapabilities {
     pub display_name: Option<String>,
@@ -699,6 +728,7 @@ pub struct ProviderCapabilities {
     pub playback: Option<Arc<dyn PlaybackSourceProvider>>,
     pub recommendations: Option<Arc<dyn RecommendationProvider>>,
     pub lyrics: Option<Arc<dyn LyricsProvider>>,
+    pub comments: Option<Arc<dyn CommentsProvider>>,
     pub share: Option<Arc<dyn ShareProvider>>,
     pub account: Option<Arc<dyn AccountProvider>>,
 }
@@ -709,6 +739,7 @@ impl ProviderCapabilities {
             && self.playback.is_none()
             && self.recommendations.is_none()
             && self.lyrics.is_none()
+            && self.comments.is_none()
             && self.share.is_none()
             && self.account.is_none()
     }
@@ -721,6 +752,7 @@ pub struct MusicProviderCapabilityFacade {
     playback: Option<Arc<dyn PlaybackSourceProvider>>,
     recommendations: Option<Arc<dyn RecommendationProvider>>,
     lyrics: Option<Arc<dyn LyricsProvider>>,
+    comments: Option<Arc<dyn CommentsProvider>>,
     share: Option<Arc<dyn ShareProvider>>,
     account: Option<Arc<dyn AccountProvider>>,
     legacy_provider: Option<Arc<dyn MusicProvider>>,
@@ -749,6 +781,7 @@ impl MusicProviderCapabilityFacade {
         provider: Arc<dyn MusicProvider>,
     ) -> Self {
         let display_name = provider.display_name().to_owned();
+        let has_comments = provider.comments_provider().is_some();
         let adapter = Arc::new(LegacyCapabilityAdapter {
             profile,
             provider: Arc::clone(&provider),
@@ -760,6 +793,7 @@ impl MusicProviderCapabilityFacade {
             playback: Some(adapter.clone()),
             recommendations: Some(adapter.clone()),
             lyrics: Some(adapter.clone()),
+            comments: has_comments.then(|| adapter.clone() as Arc<dyn CommentsProvider>),
             share: Some(adapter.clone()),
             account: Some(adapter),
             legacy_provider: Some(provider),
@@ -777,6 +811,7 @@ impl MusicProviderCapabilityFacade {
             playback: capabilities.playback,
             recommendations: capabilities.recommendations,
             lyrics: capabilities.lyrics,
+            comments: capabilities.comments,
             share: capabilities.share,
             account: capabilities.account,
             legacy_provider: None,
@@ -802,6 +837,7 @@ impl MusicProviderCapabilityFacade {
                 playback: self.playback.is_some(),
                 recommendations: self.recommendations.is_some(),
                 lyrics: self.lyrics.is_some(),
+                comments: self.comments.is_some(),
                 share: self.share.is_some(),
                 account: self.account.is_some(),
             },
@@ -822,6 +858,10 @@ impl MusicProviderCapabilityFacade {
 
     pub fn lyrics(&self) -> Option<&dyn LyricsProvider> {
         self.lyrics.as_deref()
+    }
+
+    pub fn comments(&self) -> Option<Arc<dyn CommentsProvider>> {
+        self.comments.as_ref().map(Arc::clone)
     }
 
     pub fn share(&self) -> Option<&dyn ShareProvider> {
@@ -1224,6 +1264,16 @@ impl ProviderRegistry {
             .ok_or_else(|| unsupported_provider_capability("lyrics"))
     }
 
+    pub fn require_comments_provider_for_profile(
+        &self,
+        provider_id: Option<&str>,
+        profile_id: Option<&str>,
+    ) -> ProviderResult<Arc<dyn CommentsProvider>> {
+        self.require_provider_profile(provider_id, profile_id)?
+            .comments()
+            .ok_or_else(|| unsupported_provider_capability("comments"))
+    }
+
     pub fn require_playback_provider_for_profile(
         &self,
         provider_id: Option<&str>,
@@ -1483,15 +1533,20 @@ impl ProviderRegistry {
         match song.provider.as_ref() {
             Some(reference) => {
                 self.resolve_profile(Some(&reference.provider_id), Some(&reference.profile_id))
-                    .map_err(|_| PlaybackSourceError::TrackUnavailable)?;
+                    .map_err(|error| match error.code.as_str() {
+                        "provider-unavailable" | "profile-unavailable" => {
+                            PlaybackSourceError::ProviderUnavailable
+                        }
+                        _ => PlaybackSourceError::ProviderFailure,
+                    })?;
                 self.capabilities_for_profile(&reference.provider_id, &reference.profile_id)
                     .and_then(|provider| provider.playback_arc())
-                    .ok_or(PlaybackSourceError::TrackUnavailable)
+                    .ok_or(PlaybackSourceError::ProviderUnsupported)
             }
             None => self
                 .capabilities(self.default_id.as_str())
                 .and_then(|provider| provider.playback_arc())
-                .ok_or(PlaybackSourceError::TrackUnavailable),
+                .ok_or(PlaybackSourceError::ProviderUnsupported),
         }
     }
 
@@ -1793,6 +1848,25 @@ mod tests {
         drop(source);
         assert_eq!(id.as_str(), "plugin.example-source_2");
         assert_eq!(id.to_string(), "plugin.example-source_2");
+    }
+
+    #[test]
+    fn playback_lookup_distinguishes_missing_profiles_from_unsupported_capabilities() {
+        let registry = test_registry();
+        assert!(matches!(
+            registry.playback_for_song(&scoped_song(Some("default"))),
+            Err(PlaybackSourceError::ProviderUnsupported)
+        ));
+        assert!(matches!(
+            registry.playback_for_song(&scoped_song(Some("missing"))),
+            Err(PlaybackSourceError::ProviderUnavailable)
+        ));
+        let mut foreign = scoped_song(Some("default"));
+        foreign.provider.as_mut().unwrap().provider_id = "plugin.disabled".to_owned();
+        assert!(matches!(
+            registry.playback_for_song(&foreign),
+            Err(PlaybackSourceError::ProviderUnavailable)
+        ));
     }
 
     #[test]

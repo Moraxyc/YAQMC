@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CacheStats } from '@yaqmc/client';
 import i18n from '../i18n';
 import { resetAccountRuntimeForTest, useAccountStore } from '../application/account-runtime';
 import { defaultPreferences, usePreferencesStore } from '../application/preferences';
@@ -14,6 +15,17 @@ import { getYaqmcClient } from '../application/yaqmc-runtime';
 import type { AccountSnapshot } from '../domain/music';
 import type { AccountMusicProvider, MusicProvider } from '../providers/music-provider';
 import { SettingsPage } from './SettingsPage';
+
+const storageSettings = vi.hoisted(() => ({
+  available: true,
+  cache: null as CacheStats | null,
+  loading: false,
+  clearing: false,
+  error: null as 'read' | 'clear' | null,
+  refresh: vi.fn(),
+  clearCache: vi.fn(),
+}));
+vi.mock('../application/storage-settings', () => ({ useStorageSettings: () => storageSettings }));
 
 vi.mock('../application/host-capabilities', () => {
   const desktop = {
@@ -185,6 +197,7 @@ function mockProfileInvoke(result: unknown) {
 
 describe('SettingsPage account section', () => {
   beforeEach(async () => {
+    Object.assign(storageSettings, { cache: null, loading: false, clearing: false, error: null });
     resetAccountRuntimeForTest();
     usePreferencesStore.setState({
       ...defaultPreferences,
@@ -195,6 +208,41 @@ describe('SettingsPage account section', () => {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
+  });
+
+  it('renders host cache files including component entries and calls host maintenance actions', async () => {
+    storageSettings.cache = {
+      totalBytes: 2048,
+      mediaBytes: 1024,
+      artworkBytes: 512,
+      componentBytes: 512,
+      mediaEntries: 1,
+      artworkEntries: 2,
+      componentEntries: 3,
+      metadataEntries: 4,
+      lyricEntries: 5,
+      mediaLimitBytes: 4096,
+      artworkLimitBytes: 4096,
+    };
+    renderSettings(accountProvider().value);
+    expect(
+      screen.getByText(/2 KiB across 6 files, 4 metadata records, and 5 lyric records/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear cache' }));
+    expect(storageSettings.clearCache).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh cache usage' }));
+    expect(storageSettings.refresh).toHaveBeenCalled();
+  });
+
+  it('reports a native cache read failure instead of claiming desktop runtime is unavailable', async () => {
+    storageSettings.error = 'read';
+    renderSettings(accountProvider().value);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Could not read local cache usage. Please retry.',
+    );
+    expect(
+      screen.queryByText('Cache management requires the native app runtime.'),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps the legacy ProviderContext selection stable while rendering Settings', () => {
@@ -369,6 +417,21 @@ describe('SettingsPage account section', () => {
     expect(container.innerHTML).not.toContain('untrusted.example');
   });
 
+  it('displays NetEase account avatars and falls back cleanly on image errors', () => {
+    const account = accountProvider({
+      id: 'org.yaqmc.providers.music.netease',
+      profileId: 'default',
+    });
+    const url = 'https://p2.music.126.net/synthetic-account-avatar.jpg';
+    useAccountStore.setState({ snapshot: authenticatedSnapshot(url) });
+    const { container } = renderSettings(account.value);
+    const avatar = screen.getByRole('img', { name: 'Synthetic Listener account avatar' });
+    expect(avatar).toHaveAttribute('src', url);
+    fireEvent.error(avatar);
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(container.querySelector('.settings-account-profile__avatar')).toHaveTextContent('S');
+  });
+
   it('renders an out-of-range membership expiry as unknown instead of throwing', () => {
     const account = accountProvider();
     const snapshot = authenticatedSnapshot();
@@ -492,7 +555,35 @@ describe('SettingsPage account section', () => {
     fireEvent.click(screen.getByRole('combobox', { name: 'Application language' }));
     fireEvent.click(screen.getByRole('option', { name: '繁體中文' }));
     expect(usePreferencesStore.getState().locale).toBe('zh-TW');
+    expect(usePreferencesStore.getState().lyrics.chineseScript).toBe(
+      defaultPreferences.lyrics.chineseScript,
+    );
     expect(window.localStorage.getItem('yaqmc.locale')).toBe('zh-TW');
+  });
+
+  it('sets Traditional Chinese lyrics without changing the interface locale', () => {
+    renderSettings(accountProvider().value);
+    fireEvent.click(screen.getByRole('combobox', { name: 'Chinese lyric script' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Traditional Chinese (Taiwan)' }));
+    expect(usePreferencesStore.getState().lyrics.chineseScript).toBe('traditional');
+    expect(usePreferencesStore.getState().locale).toBe(defaultPreferences.locale);
+  });
+
+  it('adjusts the secondary font independently for each lyrics surface', () => {
+    usePreferencesStore.setState({
+      surfaces: {
+        desktop: { ...defaultPreferences.surfaces.desktop, enabled: true },
+        island: { ...defaultPreferences.surfaces.island, enabled: true },
+      },
+    });
+    renderSettings(accountProvider().value);
+    const sliders = screen.getAllByRole('slider', {
+      name: 'Translation and romanization font size',
+    });
+    fireEvent.change(sliders[0]!, { target: { value: '22' } });
+    expect(usePreferencesStore.getState().surfaces.desktop.secondaryFontSize).toBe(22);
+    expect(usePreferencesStore.getState().surfaces.desktop.fontSize).toBe(30);
+    expect(usePreferencesStore.getState().surfaces.island.secondaryFontSize).toBe(8.84);
   });
 
   it('moves active-preset typography and lyrics weight into the settings page', () => {

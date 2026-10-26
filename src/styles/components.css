@@ -689,6 +689,26 @@ input[type='range']:disabled {
   font-weight: 560;
 }
 
+.track-row__title-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.track-row__title-line .track-row__title {
+  width: auto;
+  min-width: 0;
+}
+
+.track-access-badge {
+  flex-shrink: 0;
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 .track-row[data-active] .track-row__title {
   color: var(--accent);
 }
@@ -1984,7 +2004,7 @@ input[type='range']:disabled {
   display: grid;
   place-content: center;
   justify-items: center;
-  color: var(--text-tertiary);
+  color: color-mix(in srgb, var(--lyrics-foreground, var(--lyrics-ink)) 80%, transparent);
   text-align: center;
 }
 
@@ -1999,7 +2019,7 @@ input[type='range']:disabled {
 
 .lyrics-stage__message strong {
   margin-top: 14px;
-  color: var(--text);
+  color: var(--lyrics-foreground, var(--lyrics-ink));
   font-size: var(--text-lg);
 }
 
@@ -2273,10 +2293,17 @@ input[type='range']:disabled {
 }
 
 .settings-account-profile__avatar {
+  display: grid;
+  flex: 0 0 44px;
   width: 44px;
   height: 44px;
   border-radius: 50%;
   object-fit: cover;
+  place-items: center;
+  overflow: hidden;
+  background: var(--surface-hover);
+  color: var(--text);
+  font-weight: 700;
 }
 
 .settings-account-profile__identity {
@@ -2519,4 +2546,66 @@ input[type='range']:disabled {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
   color: var(--danger);
   font-variant-numeric: tabular-nums;
+}
+/* Popular comments occupy a separate, bounded strip above the lyrics. */
+.comment-danmaku {
+  position: absolute;
+  inset: 4.5rem 0 auto;
+  height: 7.5rem;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+  contain: layout paint;
+}
+.comment-danmaku__item {
+  position: absolute;
+  top: calc(var(--comment-lane) * 2.35rem);
+  left: 100%;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: max-content;
+  max-width: min(34rem, 85vw);
+  padding: 0.35rem 0.8rem;
+  color: #fff;
+  background: rgb(0 0 0 / 38%);
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 2rem;
+  font-size: 0.82rem;
+  text-shadow: 0 1px 3px #000;
+  animation: comment-danmaku var(--comment-cycle) linear var(--comment-delay) infinite;
+  /* Scrolling is the feature itself; override global reduced-motion duration
+     and iteration limits here, while playback still controls pause/resume. */
+  animation-duration: var(--comment-cycle) !important;
+  animation-iteration-count: infinite !important;
+  will-change: transform;
+}
+.comment-danmaku__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.comment-danmaku__likes {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: none;
+}
+.comment-danmaku[data-paused] .comment-danmaku__item {
+  animation-play-state: paused;
+}
+@keyframes comment-danmaku {
+  0% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  25% {
+    transform: translateX(calc(-100vw - 100%));
+    opacity: 1;
+  }
+  25.01%,
+  100% {
+    transform: translateX(calc(-100vw - 100%));
+    opacity: 0;
+  }
 }

@@ -14,6 +14,7 @@ use thiserror::Error;
 use crate::credentials::CredentialStore;
 use crate::plugin::{
     component_host::ComponentHostServices,
+    federation::{FederatedProvider, FederationMember},
     manifest::{is_plugin_id, parse_semver, PluginManifest},
     package::{extract_to, inspect_package, sha256_bytes, PackageInspection},
     permissions::PluginPermission,
@@ -212,12 +213,15 @@ struct ProviderRuntimeState {
     registry: Option<Arc<ProviderRegistry>>,
     host_services: Option<ComponentHostServices>,
     active: HashMap<String, ActiveComponentProvider>,
+    federations: HashMap<String, Vec<String>>,
     restore_accounts_on_activation: bool,
 }
 
 struct ActiveComponentProvider {
+    plugin_id: String,
     provider_id: String,
     adapter: Arc<ComponentProviderAdapter>,
+    registered: bool,
 }
 
 struct HostInner {
@@ -335,6 +339,16 @@ impl ExtensionHost {
         self.attach_provider_state(registry, None)
     }
 
+    pub(crate) fn inspect_component_cache(&self, clear: bool) -> Result<(u64, u64), String> {
+        let services = self
+            .provider_runtime
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .host_services
+            .clone();
+        services.map_or(Ok((0, 0)), |services| services.inspect_cache(clear))
+    }
+
     pub fn attach_provider_runtime(
         &self,
         registry: Arc<ProviderRegistry>,
@@ -389,26 +403,35 @@ impl ExtensionHost {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .records
             .values()
-            .filter_map(|(_, manifest, _)| {
-                let provider = manifest.provider.as_ref()?;
-                let has = |capability| provider.capabilities.contains(&capability);
-                Some((
-                    provider.id.clone(),
-                    provider
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| manifest.name.clone()),
-                    ProviderCapabilitySummary {
-                        catalog: has(crate::plugin::manifest::ProviderCapability::Catalog),
-                        playback: has(crate::plugin::manifest::ProviderCapability::Playback),
-                        recommendations: has(
-                            crate::plugin::manifest::ProviderCapability::Recommendation,
-                        ),
-                        lyrics: has(crate::plugin::manifest::ProviderCapability::Lyrics),
-                        share: false,
-                        account: has(crate::plugin::manifest::ProviderCapability::Account),
-                    },
-                ))
+            .flat_map(|(_, manifest, _)| {
+                manifest
+                    .provider_declarations()
+                    .into_iter()
+                    .map(|provider| {
+                        let has = |capability| provider.capabilities.contains(&capability);
+                        (
+                            provider.id.clone(),
+                            provider
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| manifest.name.clone()),
+                            ProviderCapabilitySummary {
+                                catalog: has(crate::plugin::manifest::ProviderCapability::Catalog),
+                                playback: has(
+                                    crate::plugin::manifest::ProviderCapability::Playback,
+                                ),
+                                recommendations: has(
+                                    crate::plugin::manifest::ProviderCapability::Recommendation,
+                                ),
+                                lyrics: has(crate::plugin::manifest::ProviderCapability::Lyrics),
+                                comments: has(
+                                    crate::plugin::manifest::ProviderCapability::Comments,
+                                ),
+                                share: false,
+                                account: has(crate::plugin::manifest::ProviderCapability::Account),
+                            },
+                        )
+                    })
             })
             .collect::<Vec<_>>();
         for (id, name, capabilities) in providers {
@@ -454,15 +477,15 @@ impl ExtensionHost {
             }
         };
         let desired_set = desired.iter().cloned().collect::<HashSet<_>>();
-        let active = self
-            .provider_runtime
+        let installed = self
+            .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .active
+            .records
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        for id in active {
+        for id in installed {
             if !desired_set.contains(&id) {
                 if let Err(error) = self.deactivate_provider_plugin(&id) {
                     tracing::warn!(target: "plugin.provider", plugin_id = %id, error = %error, "provider plugin could not be deactivated cleanly");
@@ -517,15 +540,62 @@ impl ExtensionHost {
         if manifest.api_version != 3 || !enabled {
             return Ok(());
         }
-        {
+        let settings = self
+            .settings_get(&manifest.id, true)
+            .unwrap_or_else(|_| serde_json::json!({}));
+        let mode = settings
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("isolated");
+        if !matches!(mode, "isolated" | "aggregate") {
+            return Err(HostError::from("the plugin mode setting is invalid"));
+        }
+        let declarations = manifest.provider_declarations();
+        let active_declarations = declarations.clone();
+        if active_declarations.is_empty() {
+            return Err(HostError::from("the plugin does not declare a provider"));
+        }
+        let provider_ids = active_declarations
+            .iter()
+            .map(|provider| provider.id.clone())
+            .collect::<Vec<_>>();
+        let partially_active = {
             let runtime = self
                 .provider_runtime
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some(active) = runtime.active.get(id) {
-                active.adapter.component().enable();
+            if provider_ids.iter().any(|provider_id| {
+                runtime
+                    .active
+                    .get(provider_id)
+                    .is_some_and(|active| active.plugin_id != id)
+            }) {
+                return Err(HostError::from(
+                    "a provider ID is already owned by another plugin",
+                ));
+            }
+            if provider_ids.iter().all(|provider_id| {
+                runtime
+                    .active
+                    .get(provider_id)
+                    .is_some_and(|active| active.plugin_id == id)
+            }) {
+                for provider_id in &provider_ids {
+                    if let Some(active) = runtime.active.get(provider_id) {
+                        active.adapter.component().enable();
+                    }
+                }
                 return Ok(());
             }
+            provider_ids.iter().any(|provider_id| {
+                runtime
+                    .active
+                    .get(provider_id)
+                    .is_some_and(|active| active.plugin_id == id)
+            })
+        };
+        if partially_active {
+            self.deactivate_provider_plugin(id)?;
         }
         let (registry, host_services, restore_account) = {
             let runtime = self
@@ -540,18 +610,6 @@ impl ExtensionHost {
                 runtime.restore_accounts_on_activation,
             )
         };
-        let provider = manifest
-            .provider
-            .as_ref()
-            .ok_or_else(|| HostError::from("the provider declaration is missing"))?;
-        for capability in &provider.capabilities {
-            if !granted
-                .iter()
-                .any(|permission| permission == capability.as_str())
-            {
-                return Err(HostError::from("the provider capability was not granted"));
-            }
-        }
         let component_path = manifest
             .entrypoints
             .component
@@ -570,53 +628,213 @@ impl ExtensionHost {
         let runtime_handle = host_services
             .as_ref()
             .map(ComponentHostServices::runtime_handle);
-        let host = host_services
-            .map(|services| services.for_plugin(&manifest.id, &provider.id, allowed_origins));
-        let adapter = ComponentProviderAdapter::from_manifest_with_host(&manifest, &bytes, host)
+        let mut adapters = Vec::<(String, Arc<ComponentProviderAdapter>)>::new();
+        for provider in active_declarations {
+            for capability in &provider.capabilities {
+                if !granted
+                    .iter()
+                    .any(|permission| permission == capability.as_str())
+                {
+                    return Err(HostError::from("the provider capability was not granted"));
+                }
+            }
+            let host = host_services.as_ref().map(|services| {
+                services.for_plugin_with_settings(
+                    &manifest.id,
+                    &provider.id,
+                    allowed_origins.clone(),
+                    settings.clone(),
+                )
+            });
+            let adapter = ComponentProviderAdapter::from_manifest_with_provider(
+                &manifest, provider, &bytes, host,
+            )
             .map_err(|error| HostError::from(error.to_string()))?;
-        registry
-            .register_capabilities(adapter.provider_id(), adapter.registry_capabilities())
-            .map_err(|error| HostError::from(error.to_string()))?;
-        self.provider_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .active
-            .insert(
-                id.to_owned(),
-                ActiveComponentProvider {
-                    provider_id: adapter.provider_id().to_owned(),
-                    adapter: Arc::clone(&adapter),
-                },
-            );
+            adapters.push((provider.id.clone(), adapter));
+        }
+        let mut activated = Vec::<(String, Arc<ComponentProviderAdapter>)>::new();
+        for (provider_id, adapter) in adapters {
+            if let Err(error) = registry
+                .register_capabilities(adapter.provider_id(), adapter.registry_capabilities())
+            {
+                Self::rollback_registered_components(&registry, &activated, &[]);
+                return Err(HostError::from(error.to_string()));
+            }
+            activated.push((provider_id, adapter));
+        }
+        let mut federation_ids = Vec::new();
+        if settings
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|mode| mode == "aggregate")
+        {
+            for federation in manifest.federation_declarations() {
+                let mut members = Vec::new();
+                if federation.include_default_provider {
+                    let provider_id = registry.default_id().to_string();
+                    if let (Ok(catalog), Ok(playback), Ok(lyrics)) = (
+                        registry.require_catalog_provider(&provider_id),
+                        registry.require_playback_provider(&provider_id),
+                        registry.require_lyrics_provider(&provider_id),
+                    ) {
+                        members.push(FederationMember {
+                            provider_id: provider_id.clone(),
+                            profile_id: yaqmc_provider_api::DEFAULT_PROFILE_ID.to_owned(),
+                            catalog,
+                            playback: Some(playback),
+                            lyrics: Some(lyrics),
+                            comments: registry
+                                .require_comments_provider_for_profile(Some(&provider_id), None)
+                                .ok(),
+                        });
+                    }
+                }
+                for member_id in &federation.members {
+                    let Ok(catalog) = registry.require_catalog_provider(member_id) else {
+                        continue;
+                    };
+                    let playback = registry.require_playback_provider(member_id).ok();
+                    let lyrics = registry.require_lyrics_provider(member_id).ok();
+                    members.push(FederationMember {
+                        provider_id: member_id.clone(),
+                        profile_id: yaqmc_provider_api::DEFAULT_PROFILE_ID.to_owned(),
+                        catalog,
+                        playback,
+                        lyrics,
+                        comments: registry
+                            .require_comments_provider_for_profile(Some(member_id), None)
+                            .ok(),
+                    });
+                }
+                if members.is_empty() {
+                    continue;
+                }
+                let federated = FederatedProvider::new(
+                    federation.id.clone(),
+                    federation
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| "YAQMC Music Platforms".to_owned()),
+                    members,
+                );
+                let capabilities = federated.registry_capabilities();
+                if let Err(error) = registry.register_capabilities(&federation.id, capabilities) {
+                    Self::rollback_registered_components(&registry, &activated, &federation_ids);
+                    return Err(HostError::from(error.to_string()));
+                }
+                federation_ids.push(federation.id.clone());
+            }
+        }
+        {
+            let mut runtime = self
+                .provider_runtime
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for (provider_id, adapter) in &activated {
+                runtime.active.insert(
+                    provider_id.clone(),
+                    ActiveComponentProvider {
+                        plugin_id: id.to_owned(),
+                        provider_id: adapter.provider_id().to_owned(),
+                        adapter: Arc::clone(adapter),
+                        registered: true,
+                    },
+                );
+            }
+            if !federation_ids.is_empty() {
+                runtime
+                    .federations
+                    .insert(id.to_owned(), federation_ids.clone());
+            }
+        }
         if restore_account {
-            if let (Some(runtime_handle), Ok(account)) = (
-                runtime_handle,
-                registry.require_account_provider(adapter.provider_id()),
-            ) {
-                runtime_handle.spawn(async move {
-                    account.provider_account().restore_session().await;
-                });
+            for (_, adapter) in &activated {
+                if let (Some(runtime_handle), Ok(account)) = (
+                    runtime_handle.clone(),
+                    registry.require_account_provider(adapter.provider_id()),
+                ) {
+                    runtime_handle.spawn(async move {
+                        account.provider_account().restore_session().await;
+                    });
+                }
             }
         }
         Ok(())
     }
 
+    fn rollback_registered_components(
+        registry: &ProviderRegistry,
+        active: &[(String, Arc<ComponentProviderAdapter>)],
+        federation_ids: &[String],
+    ) {
+        for (_, adapter) in active {
+            adapter.component().disable();
+        }
+        for federation_id in federation_ids {
+            let _ = registry.unregister(federation_id);
+            registry.forget_inactive(federation_id);
+        }
+        for (_, adapter) in active {
+            let _ = registry.unregister(adapter.provider_id());
+        }
+    }
+
     fn deactivate_provider_plugin(&self, id: &str) -> Result<(), HostError> {
-        let (registry, active) = {
+        let provider_ids = {
+            let inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            inner
+                .records
+                .get(id)
+                .map(|(_, manifest, _)| {
+                    manifest
+                        .provider_declarations()
+                        .into_iter()
+                        .map(|provider| provider.id.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let (registry, active, federation_ids) = {
             let mut runtime = self
                 .provider_runtime
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            (runtime.registry.clone(), runtime.active.remove(id))
+            let active = provider_ids
+                .iter()
+                .filter_map(|provider_id| {
+                    let owned = runtime
+                        .active
+                        .get(provider_id)
+                        .is_some_and(|active| active.plugin_id == id);
+                    owned.then(|| runtime.active.remove(provider_id)).flatten()
+                })
+                .collect::<Vec<_>>();
+            let federation_ids = runtime.federations.remove(id).unwrap_or_default();
+            (runtime.registry.clone(), active, federation_ids)
         };
-        let Some(active) = active else {
+        if active.is_empty() && federation_ids.is_empty() {
             return Ok(());
-        };
-        active.adapter.component().disable();
+        }
+        for active in &active {
+            active.adapter.component().disable();
+        }
         if let Some(registry) = registry {
-            registry
-                .unregister(&active.provider_id)
-                .map_err(|error| HostError::from(error.to_string()))?;
+            for active in active {
+                if active.registered {
+                    registry
+                        .unregister(&active.provider_id)
+                        .map_err(|error| HostError::from(error.to_string()))?;
+                }
+            }
+            for federation_id in federation_ids {
+                registry
+                    .unregister(&federation_id)
+                    .map_err(|error| HostError::from(error.to_string()))?;
+                registry.forget_inactive(&federation_id);
+            }
         }
         Ok(())
     }
@@ -648,13 +866,14 @@ impl ExtensionHost {
     }
 
     fn decorate_record(&self, mut record: PluginRecord) -> PluginRecord {
+        let provider_id = record.provider.as_ref().map(|provider| provider.id.clone());
         if let Some(provider) = record.provider.as_mut() {
             if let Some(active) = self
                 .provider_runtime
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .active
-                .get(&record.id)
+                .get(provider_id.as_deref().unwrap_or(&record.id))
             {
                 provider.circuit_open = active.adapter.component().circuit_open();
                 provider.consecutive_faults = active.adapter.component().consecutive_faults();
@@ -831,6 +1050,8 @@ impl ExtensionHost {
                 component: None,
             },
             provider: None,
+            providers: Vec::new(),
+            federations: Vec::new(),
             permissions: Vec::new(),
             dependencies: BTreeMap::new(),
             conflicts: Vec::new(),
@@ -1204,6 +1425,8 @@ impl ExtensionHost {
                 component: None,
             },
             provider: None,
+            providers: Vec::new(),
+            federations: Vec::new(),
             permissions: Vec::new(),
             dependencies: BTreeMap::new(),
             conflicts: Vec::new(),
@@ -1319,7 +1542,7 @@ impl ExtensionHost {
 
     pub fn uninstall(&self, id: &str, remove_data: bool) -> Result<(), HostError> {
         self.deactivate_provider_plugin(id)?;
-        let provider_id = {
+        let provider_ids = {
             let inner = self
                 .inner
                 .lock()
@@ -1327,8 +1550,14 @@ impl ExtensionHost {
             inner
                 .records
                 .get(id)
-                .and_then(|(_, manifest, _)| manifest.provider.as_ref())
-                .map(|provider| provider.id.clone())
+                .map(|(_, manifest, _)| {
+                    manifest
+                        .provider_declarations()
+                        .into_iter()
+                        .map(|provider| provider.id.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
         };
         let provider_registry = self
             .provider_runtime
@@ -1343,10 +1572,12 @@ impl ExtensionHost {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .host_services
                 .clone();
-            if let (Some(services), Some(provider_id)) = (services, provider_id.as_deref()) {
-                if let Err(error) = services.remove_plugin_data(id, provider_id) {
-                    let _ = self.activate_provider_plugin(id);
-                    return Err(HostError::from(error));
+            if let Some(services) = services {
+                for provider_id in &provider_ids {
+                    if let Err(error) = services.remove_plugin_data(id, provider_id) {
+                        let _ = self.activate_provider_plugin(id);
+                        return Err(HostError::from(error));
+                    }
                 }
             }
         }
@@ -1357,8 +1588,10 @@ impl ExtensionHost {
         inner.records.remove(id);
         inner.host.style_order.retain(|candidate| candidate != id);
         inner.runtimes.retain(|_, runtime| runtime.plugin_id != id);
-        if let (Some(registry), Some(provider_id)) = (provider_registry, provider_id.as_deref()) {
-            registry.forget_inactive(provider_id);
+        if let Some(registry) = provider_registry {
+            for provider_id in provider_ids {
+                registry.forget_inactive(&provider_id);
+            }
         }
         let plugin_root = self.root.join(id);
         let _ = fs::remove_dir_all(&plugin_root);
@@ -1602,6 +1835,15 @@ impl ExtensionHost {
             crate::plugin::settings::parse_settings_fields(&schema).map_err(HostError::from)?;
         let public = crate::plugin::settings::public_settings(&fields, &next);
         inner.settings.insert(plugin_id.to_owned(), next);
+        let enabled = inner
+            .records
+            .get(plugin_id)
+            .is_some_and(|(state, _, _)| state.enabled);
+        drop(inner);
+        if enabled {
+            self.deactivate_provider_plugin(plugin_id)?;
+            self.activate_provider_plugin(plugin_id)?;
+        }
         Ok(public)
     }
 
@@ -1888,6 +2130,7 @@ mod tests {
     use crate::plugin::{
         component::static_test_component, manifest::ProviderCapability, package::PackageFile,
     };
+    use serde_json::json;
     use yaqmc_provider_api::{CredentialStore, ProviderRegistry};
 
     fn style_inspection(id: &str) -> PackageInspection {
@@ -1995,6 +2238,107 @@ mod tests {
             }"#,
         )
         .expect("account component manifest");
+        let component = include_bytes!("../../tests/fixtures/component-host-guest.wasm").to_vec();
+        PackageInspection {
+            sha256: sha256_bytes(&component),
+            compressed_bytes: component.len() as u64,
+            expanded_bytes: component.len() as u64,
+            file_count: 2,
+            files: vec![
+                PackageFile {
+                    path: "manifest.json".into(),
+                    bytes: serde_json::to_vec(&manifest).expect("manifest bytes"),
+                },
+                PackageFile {
+                    path: "component/provider.wasm".into(),
+                    bytes: component,
+                },
+            ],
+            manifest,
+            style_scan: ScanReport::default(),
+            script_scan: ScanReport::default(),
+        }
+    }
+
+    fn multi_provider_component_inspection() -> PackageInspection {
+        let manifest: PluginManifest = serde_json::from_value(json!({
+            "manifestVersion": 2,
+            "id": "org.example.multi-music",
+            "name": "Multi Music Component",
+            "version": "1.0.0",
+            "apiVersion": 3,
+            "entrypoints": { "component": "component/provider.wasm" },
+            "providers": [
+                {
+                    "id": "org.example.multi-music.spotify",
+                    "name": "Spotify",
+                    "platform": "spotify",
+                    "witVersion": "0.1.0",
+                    "world": "provider-account",
+                    "capabilities": [
+                        "provider.catalog",
+                        "provider.playback",
+                        "provider.lyrics",
+                        "provider.account"
+                    ]
+                },
+                {
+                    "id": "org.example.multi-music.netease",
+                    "name": "NetEase",
+                    "platform": "netease",
+                    "witVersion": "0.1.0",
+                    "world": "provider-account",
+                    "capabilities": [
+                        "provider.catalog",
+                        "provider.playback",
+                        "provider.lyrics",
+                        "provider.account"
+                    ]
+                },
+                {
+                    "id": "org.example.multi-music.kugou",
+                    "name": "KuGou",
+                    "platform": "kugou",
+                    "witVersion": "0.1.0",
+                    "world": "provider-account",
+                    "capabilities": [
+                        "provider.catalog",
+                        "provider.playback",
+                        "provider.lyrics",
+                        "provider.account"
+                    ]
+                }
+            ],
+            "federations": [{
+                "id": "org.example.multi-music.aggregate",
+                "name": "All Music",
+                "members": [
+                    "org.example.multi-music.spotify",
+                    "org.example.multi-music.netease",
+                    "org.example.multi-music.kugou"
+                ],
+                "includeDefaultProvider": true
+            }],
+            "permissions": [
+                "provider.catalog",
+                "provider.playback",
+                "provider.lyrics",
+                "provider.account",
+                "plugin.storage",
+                "network:https://api.example.com"
+            ],
+            "settingsSchema": {
+                "fields": [
+                    {
+                        "id": "mode",
+                        "type": "select",
+                        "options": ["isolated", "aggregate"],
+                        "default": "isolated"
+                    }
+                ]
+            }
+        }))
+        .expect("multi-provider manifest");
         let component = include_bytes!("../../tests/fixtures/component-host-guest.wasm").to_vec();
         PackageInspection {
             sha256: sha256_bytes(&component),
@@ -2162,6 +2506,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn multi_provider_modes_keep_individual_providers_and_toggle_federation_atomically() {
+        let root = tempfile::tempdir().expect("root");
+        let mut host = ExtensionHost::open(root.path().join("plugins")).expect("host");
+        let mut registry = provider_registry(root.path());
+        host.attach_provider_runtime(
+            Arc::clone(&registry),
+            Arc::new(crate::credentials::MemoryCredentialStore::default()),
+            root.path().join("component-cache"),
+            tokio::runtime::Handle::current(),
+        )
+        .expect("attach");
+        let inspection = multi_provider_component_inspection();
+        let grants = inspection.manifest.requested_permission_keys();
+        let record = host
+            .install_inspection(inspection, true, &grants, "test")
+            .expect("install");
+        host.finish_provider_transition(record).expect("activate");
+
+        assert!(registry.contains("qqmusic"));
+        for provider in ["spotify", "netease", "kugou"] {
+            assert!(registry.contains(&format!("org.example.multi-music.{provider}")));
+        }
+        assert!(!registry.contains("org.example.multi-music.aggregate"));
+
+        let aggregate = serde_json::Map::from_iter([("mode".to_owned(), json!("aggregate"))]);
+        host.settings_set("org.example.multi-music", aggregate)
+            .expect("aggregate settings");
+        for provider in ["spotify", "netease", "kugou"] {
+            assert!(registry.contains(&format!("org.example.multi-music.{provider}")));
+        }
+        assert!(registry.contains("org.example.multi-music.aggregate"));
+
+        let isolated = serde_json::Map::from_iter([("mode".to_owned(), json!("isolated"))]);
+        host.settings_set("org.example.multi-music", isolated)
+            .expect("isolated settings");
+        assert!(registry.contains("qqmusic"));
+        for provider in ["spotify", "netease", "kugou"] {
+            assert!(registry.contains(&format!("org.example.multi-music.{provider}")));
+        }
+        assert!(!registry.contains("org.example.multi-music.aggregate"));
+        assert!(!registry
+            .descriptors()
+            .iter()
+            .any(|descriptor| { descriptor.provider_id == "org.example.multi-music.aggregate" }));
+
+        for mode in ["aggregate", "isolated"] {
+            host.settings_set(
+                "org.example.multi-music",
+                serde_json::Map::from_iter([("mode".to_owned(), json!(mode))]),
+            )
+            .expect("mode before restart");
+            host.mark_clean_exit();
+            drop(host);
+            host = ExtensionHost::open(root.path().join("plugins")).expect("reopened host");
+            registry = provider_registry(root.path());
+            host.attach_provider_runtime(
+                Arc::clone(&registry),
+                Arc::new(crate::credentials::MemoryCredentialStore::default()),
+                root.path().join("component-cache"),
+                tokio::runtime::Handle::current(),
+            )
+            .expect("reattach");
+            let descriptors = registry.descriptors();
+            assert_eq!(descriptors.len(), if mode == "aggregate" { 5 } else { 4 });
+            assert!(descriptors.iter().all(|descriptor| descriptor.available));
+            assert_eq!(
+                descriptors.iter().any(|descriptor| {
+                    descriptor.provider_id == "org.example.multi-music.aggregate"
+                }),
+                mode == "aggregate"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn account_components_restore_at_startup_and_after_reenable() {
         let root = tempfile::tempdir().expect("root");
         let host = ExtensionHost::open(root.path().join("plugins")).expect("host");
@@ -2234,7 +2653,7 @@ mod tests {
             .lock()
             .expect("runtime")
             .active
-            .get("dev.example.host-probe")
+            .get("provider.host-probe")
             .expect("active")
             .adapter
             .component()

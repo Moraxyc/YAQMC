@@ -156,6 +156,34 @@ describe('AccountDialog', () => {
     resetAccountRuntimeForTest();
   });
 
+  it('shows the specific mobile-login requirement and keeps QR login available', async () => {
+    const account = provider();
+    Object.assign(account.value, {
+      id: 'org.yaqmc.providers.music.kugou',
+      displayName: 'KuGou Music',
+      getLoginMethods: vi
+        .fn()
+        .mockResolvedValue([{ id: 'qr', label: 'KuGou QR login', flow: 'qr' }]),
+    });
+    useAccountStore.setState({
+      snapshot: stateSnapshot('guest'),
+      dialogOpen: true,
+      error: 'mobile-login-required',
+    });
+    const view = render(
+      <ProviderContext.Provider value={account.value}>
+        <AccountDialog />
+      </ProviderContext.Provider>,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'KuGou requires login with its mobile app',
+    );
+    await act(async () => Promise.resolve());
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in with QR code' }));
+    expect(account.startQrLogin).toHaveBeenCalledOnce();
+    view.unmount();
+  });
+
   it.each([
     ['guest', 'Choose an authorization method for Account Test'],
     ['restoring-session', 'Restoring your account session'],
@@ -245,6 +273,124 @@ describe('AccountDialog', () => {
     expect(getLoginMethods).toHaveBeenCalledOnce();
     expect(account.startWebLogin).toHaveBeenCalledWith('browser-oauth', undefined);
     expect(screen.queryByRole('button', { name: 'Continue with QQ' })).not.toBeInTheDocument();
+    view.unmount();
+  });
+
+  it('uses the provider QR capability when no OAuth method is declared', async () => {
+    const account = provider();
+    const getLoginMethods = vi.fn().mockResolvedValue([]);
+    Object.assign(account.value, { getLoginMethods });
+    useAccountStore.setState({ snapshot: stateSnapshot('guest'), dialogOpen: true });
+    const view = render(
+      <ProviderContext.Provider value={account.value}>
+        <AccountDialog />
+      </ProviderContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in with QR code' }));
+    expect(getLoginMethods).toHaveBeenCalledOnce();
+    expect(account.startQrLogin).toHaveBeenCalledWith(undefined);
+    expect(account.startWebLogin).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it('routes provider-declared QR methods to the QR login flow', async () => {
+    const account = provider();
+    const getLoginMethods = vi
+      .fn()
+      .mockResolvedValue([{ id: 'qr', label: 'NetEase Cloud Music QR login', flow: 'qr' }]);
+    Object.assign(account.value, { getLoginMethods });
+    useAccountStore.setState({ snapshot: stateSnapshot('guest'), dialogOpen: true });
+    const view = render(
+      <ProviderContext.Provider value={account.value}>
+        <AccountDialog />
+      </ProviderContext.Provider>,
+    );
+
+    await act(async () => Promise.resolve());
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in with QR code' }));
+    expect(getLoginMethods).toHaveBeenCalledOnce();
+    expect(account.startQrLogin).toHaveBeenCalledWith(undefined);
+    expect(account.startWebLogin).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it.each([
+    ['org.yaqmc.providers.netease', 'NetEase Cloud Music'],
+    ['org.yaqmc.providers.kugou', 'KuGou Music'],
+  ] as const)('keeps %s QR login visible when capability discovery fails', async (id, name) => {
+    const account = provider();
+    Object.assign(account.value, {
+      id,
+      displayName: name,
+      getLoginMethods: vi.fn().mockRejectedValue(new Error('backend unavailable')),
+    });
+    useAccountStore.setState({
+      snapshot: {
+        ...stateSnapshot('guest'),
+        capabilities: { ...capabilities, qrLogin: false },
+      },
+      dialogOpen: true,
+    });
+    const view = render(
+      <ProviderContext.Provider value={account.value}>
+        <AccountDialog />
+      </ProviderContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in with QR code' }));
+    expect(account.startQrLogin).toHaveBeenCalledWith(undefined);
+    expect(account.startWebLogin).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it.each([
+    ['org.yaqmc.providers.netease', 'NetEase Cloud Music'],
+    ['org.yaqmc.providers.kugou', 'KuGou Music'],
+  ])('does not treat %s QR launch metadata as QQ mobile authorization', (id, name) => {
+    const account = provider();
+    Object.assign(account.value, { id, displayName: name, reopenLogin: vi.fn() });
+    const snapshot = {
+      ...stateSnapshot('waiting-for-scan'),
+      launchUrl: 'https://example.com/login',
+    };
+    useAccountStore.setState({
+      snapshot,
+      displayedQrImageDataUri: 'data:image/png;base64,AA==',
+      dialogOpen: true,
+    });
+    const view = render(
+      <ProviderContext.Provider value={account.value}>
+        <AccountDialog />
+      </ProviderContext.Provider>,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(name);
+    expect(screen.queryByRole('button', { name: 'Open QQ Music again' })).toBeNull();
+    expect(screen.getByRole('dialog')).not.toHaveTextContent('Signing in to QQ Music itself');
+    view.unmount();
+  });
+
+  it('keeps Spotify OAuth available when method discovery fails', async () => {
+    const account = provider();
+    const getLoginMethods = vi.fn().mockRejectedValue(new Error('backend unavailable'));
+    Object.assign(account.value, {
+      id: 'org.yaqmc.providers.spotify',
+      displayName: 'Spotify',
+      getLoginMethods,
+    });
+    useAccountStore.setState({
+      snapshot: { ...stateSnapshot('guest'), capabilities: { ...capabilities, qrLogin: false } },
+      dialogOpen: true,
+    });
+    const view = render(
+      <ProviderContext.Provider value={account.value}>
+        <AccountDialog />
+      </ProviderContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Spotify browser login (PKCE)' }));
+    expect(account.startWebLogin).toHaveBeenCalledWith('browser-oauth', undefined);
+    expect(account.startQrLogin).not.toHaveBeenCalled();
     view.unmount();
   });
 

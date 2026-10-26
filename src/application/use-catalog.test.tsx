@@ -120,12 +120,44 @@ describe('useCatalog', () => {
 
     await waitFor(() => expect(screen.getByTestId('catalog-status')).toHaveTextContent('error'));
     expect(screen.getByTestId('catalog-message')).toHaveTextContent(
-      'QQ Music did not respond in time',
+      'The music provider did not respond in time',
     );
 
     screen.getByRole('button', { name: 'retry catalog' }).click();
     await waitFor(() => expect(screen.getByTestId('catalog-status')).toHaveTextContent('ready'));
     expect(provider.getLibrary).toHaveBeenCalledTimes(2);
+  });
+
+  it('distinguishes an unsupported catalog from a network failure', async () => {
+    const provider = {
+      id: 'catalog-unsupported',
+      profileId: 'default',
+      displayName: 'Catalog fixture',
+      getHome: vi
+        .fn()
+        .mockRejectedValue(new ProviderError('unsupported-operation', 'not implemented', false)),
+      getDiscover: vi.fn(),
+      getArea: vi.fn(),
+      getSong: vi.fn(),
+      getAlbum: vi.fn(),
+      getArtist: vi.fn(),
+      getArtistCatalog: vi.fn(),
+      getPlaylist: vi.fn(),
+      getLibrary: vi.fn().mockResolvedValue(librarySnapshot),
+      getLyrics: vi.fn(),
+      search: vi.fn(),
+    } satisfies MusicProvider;
+
+    render(
+      <MusicProviderRoot provider={provider}>
+        <CatalogProbe />
+      </MusicProviderRoot>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('catalog-status')).toHaveTextContent('error'));
+    expect(screen.getByTestId('catalog-message')).toHaveTextContent(
+      'This provider does not offer this catalog page. Use search',
+    );
   });
 
   it('retries a failed catalog once when connectivity returns', async () => {

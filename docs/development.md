@@ -35,9 +35,9 @@ keyring, disk cache, tray, media session, or real QQ Music transport.
 
 ## Native provider pin
 
-The production provider links the public `qqmusic-api` crate
+The provider manifest declares the `qqmusic-api` crate
 unconditionally from `https://github.com/YAQMC/qm-api-rs.git`, revision
-`75f6e4d392f6d3e64608fb48e2480fb0087009e3`.
+`bab630d44901f80cae47dd0f09314950d0028e23`.
 
 Cargo is run with `CARGO_NET_GIT_FETCH_WITH_CLI=true` by the desktop developer
 launcher. The access helper validates the manifest pin and any sibling checkout without modifying Git config:
@@ -48,6 +48,23 @@ node scripts/ci/qm-api-rs-access.mjs --check
 
 If a sibling `../qm-api-rs` checkout exists, that command also requires its
 HEAD to match the production pin.
+
+### Optional local protocol development
+
+The library's `main` branch contains the exact production pin above. A sibling development
+checkout can optionally use an ignored, project-local `.cargo/config.toml`:
+
+```toml
+[patch."https://github.com/YAQMC/qm-api-rs.git"]
+qqmusic-api = { path = "../qm-api-rs" }
+```
+
+Keep the sibling checkout at the recorded revision. Ordinary Cargo commands
+use it automatically, including `cargo build -p yaqmc-core --release --locked
+--offline`; no extra `--config` argument or global configuration is needed.
+Other checkouts can fetch the pinned Git revision without a sibling override.
+Local overrides do not satisfy the Git-source release gate or the required
+exact-pin soak.
 
 ## Full desktop run
 

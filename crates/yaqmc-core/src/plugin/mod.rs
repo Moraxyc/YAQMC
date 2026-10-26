@@ -11,11 +11,17 @@ pub mod api;
 #[cfg(feature = "plugins")]
 pub mod bridge;
 #[cfg(feature = "plugins")]
+mod browser_session;
+#[cfg(feature = "plugins")]
 pub mod component;
 #[cfg(feature = "plugins")]
 pub mod component_host;
 #[cfg(feature = "plugins")]
+pub mod federation;
+#[cfg(feature = "plugins")]
 pub mod host;
+#[cfg(feature = "plugins")]
+mod kugou_signing;
 #[cfg(feature = "plugins")]
 pub mod manifest;
 #[cfg(feature = "plugins")]

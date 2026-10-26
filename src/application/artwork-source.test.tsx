@@ -42,6 +42,35 @@ function deferred<T>() {
 }
 
 describe('artwork source policy', () => {
+  it('evicts old images by entry count and byte budget', async () => {
+    clientMocks.invoke.mockResolvedValue(pngA);
+    const url = (id: number) => `https://y.gtimg.cn/lru-${id}.jpg`;
+    for (let id = 0; id < 130; id++) await cachedArtworkSource(url(id));
+    await cachedArtworkSource(url(129));
+    expect(clientMocks.invoke).toHaveBeenCalledTimes(130);
+    await cachedArtworkSource(url(0));
+    expect(clientMocks.invoke).toHaveBeenCalledTimes(131);
+    clearArtworkMemoryCache();
+    const large = `data:image/png;base64,${btoa('x'.repeat(1024 * 1024))}`;
+    clientMocks.invoke.mockResolvedValue(large);
+    for (let id = 0; id < 7; id++) await cachedArtworkSource(url(id));
+    await cachedArtworkSource(url(0));
+    expect(clientMocks.invoke).toHaveBeenCalledTimes(139);
+  });
+  it('deduplicates shared images and runs at most four native fetches concurrently', async () => {
+    const tasks = Array.from({ length: 6 }, () => deferred<unknown>());
+    let index = 0;
+    clientMocks.invoke.mockImplementation(() => tasks[index++]!.promise);
+    const urls = tasks.map((_, id) => `https://y.gtimg.cn/queued-${id}.jpg`);
+    const requests = urls.map((url) => cachedArtworkSource(url)!);
+    expect(cachedArtworkSource(urls[0]!)).toBe(requests[0]);
+    expect(clientMocks.invoke).toHaveBeenCalledTimes(4);
+    tasks.slice(0, 4).forEach((task) => task.resolve(pngA));
+    await Promise.all(requests.slice(0, 4));
+    await waitFor(() => expect(clientMocks.invoke).toHaveBeenCalledTimes(6));
+    tasks.slice(4).forEach((task) => task.resolve(pngB));
+    await Promise.all(requests);
+  });
   beforeEach(() => {
     clientMocks.native = true;
     clientMocks.invoke.mockReset();
@@ -130,7 +159,9 @@ describe('artwork source policy', () => {
     const { result } = renderHook(() => useSafeArtworkSource(remote, { pendingRemote: 'hide' }));
 
     expect(result.current).toBeNull();
-    expect(clientMocks.invoke).toHaveBeenCalledWith('qqmusic_cache_artwork', { url: remote });
+    await waitFor(() =>
+      expect(clientMocks.invoke).toHaveBeenCalledWith('qqmusic_cache_artwork', { url: remote }),
+    );
     await act(async () => pending.resolve(pngA));
     await waitFor(() => expect(result.current).toBe(pngA));
   });
@@ -143,7 +174,9 @@ describe('artwork source policy', () => {
     const { result } = renderHook(() => useSafeArtworkSource(remote));
 
     expect(result.current).toBe(remote);
-    expect(clientMocks.invoke).toHaveBeenCalledWith('qqmusic_cache_artwork', { url: remote });
+    await waitFor(() =>
+      expect(clientMocks.invoke).toHaveBeenCalledWith('qqmusic_cache_artwork', { url: remote }),
+    );
     await act(async () => pending.resolve(pngA));
     await waitFor(() => expect(result.current).toBe(pngA));
   });
@@ -156,6 +189,71 @@ describe('artwork source policy', () => {
 
     expect(result.current).toBe(remote);
     expect(clientMocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it('routes external covers through their owning provider without a direct remote fallback', async () => {
+    const pending = deferred<unknown>();
+    clientMocks.invoke.mockReturnValue(pending.promise);
+    const source = 'https://p2.music.126.net/cover.jpg';
+    const provider = { providerId: 'plugin.netease', profileId: 'personal' };
+    expect(classifyArtworkSource(source, currentOrigin)).toBeNull();
+    const { result } = renderHook(() => useSafeArtworkSource(source, { provider }));
+    expect(result.current).toBeNull();
+    await waitFor(() =>
+      expect(clientMocks.invoke).toHaveBeenCalledWith('provider_cache_artwork', {
+        ...provider,
+        url: source,
+      }),
+    );
+    await act(async () => pending.resolve(pngA));
+    await waitFor(() => expect(result.current).toBe(pngA));
+  });
+
+  it.each([
+    'http://p2.music.126.net/cover.jpg',
+    'https://user:password@p2.music.126.net/cover.jpg',
+    'https://p2.music.126.net:444/cover.jpg',
+    'https://p2.music.126.net/cover.jpg#fragment',
+  ])('rejects unsafe scoped artwork source %s', (source) => {
+    const provider = { providerId: 'plugin.netease', profileId: 'default' };
+    expect(isCacheableArtworkSource(source, provider)).toBe(false);
+    expect(classifyArtworkSource(source, currentOrigin, provider)).toBeNull();
+  });
+
+  it('does not display a denied external URL directly', async () => {
+    clientMocks.invoke.mockRejectedValue(new Error('origin not granted'));
+    const { result } = renderHook(() =>
+      useSafeArtworkSource('https://example.com/cover.jpg', {
+        provider: { providerId: 'plugin.music', profileId: 'default' },
+      }),
+    );
+    await waitFor(() => expect(clientMocks.invoke).toHaveBeenCalledTimes(1));
+    expect(result.current).toBeNull();
+  });
+
+  it('keeps identical URLs isolated across profiles and drops stale scoped results', async () => {
+    const previous = deferred<unknown>();
+    const latest = deferred<unknown>();
+    clientMocks.invoke.mockReturnValueOnce(previous.promise).mockReturnValueOnce(latest.promise);
+    const source = 'https://imge.kugou.com/cover.jpg';
+    const { result, rerender } = renderHook(
+      ({ profileId }) =>
+        useSafeArtworkSource(source, {
+          provider: { providerId: 'plugin.kugou', profileId },
+        }),
+      { initialProps: { profileId: 'first' } },
+    );
+    rerender({ profileId: 'second' });
+    await act(async () => previous.resolve(pngA));
+    expect(result.current).toBeNull();
+    await act(async () => latest.resolve(pngB));
+    await waitFor(() => expect(result.current).toBe(pngB));
+    expect(clientMocks.invoke).toHaveBeenCalledTimes(2);
+    expect(clientMocks.invoke).toHaveBeenLastCalledWith('provider_cache_artwork', {
+      providerId: 'plugin.kugou',
+      profileId: 'second',
+      url: source,
+    });
   });
 
   it('falls back to the allowlisted remote URL when native cache is rejected', async () => {

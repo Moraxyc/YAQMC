@@ -1,17 +1,15 @@
-//! Row I: library `MediaSource` URLs sanitized through the in-tree CDN allowlist.
-//!
-//! Entitlement / quality ladder (`choose_source`) stays in-tree. Both clear
-//! and encrypted vkey requests use the typed library `get_song_urls`; the
-//! provider only maps its candidate list and validates the returned CDN data.
+//! Consume the library's typed clear/encrypted playback file resolver.
+//! Entitlement and quality selection stay in the host; QQ filename, vkey
+//! response identity and CDN rules belong to qm-api-rs.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 #[cfg(test)]
 use std::sync::Arc;
 
+#[cfg(test)]
 use qqmusic_api::models::song::UrlinfoItem;
-use qqmusic_api::modules::song::{
-    FileTypeLike, SongFileInfo, SongFileType, SongQuality, SpecialSongFileType,
-};
+#[cfg(test)]
+use qqmusic_api::modules::song::SongQuality;
 use qqmusic_api::Platform;
 #[cfg(test)]
 use yaqmc_provider_api::PlaybackLocation;
@@ -22,27 +20,14 @@ use crate::qmapi::qmapi_client_with;
 #[cfg(test)]
 use crate::qmc::EncryptedMediaKey;
 #[cfg(test)]
+use crate::qqmusic::normalize_cdn_url;
+#[cfg(test)]
 use crate::qqmusic::playback_headers;
-use crate::qqmusic::{normalize_cdn_url, QQMusicError};
+use crate::qqmusic::QQMusicError;
 
 /// Library unplayable result used when the account cannot stream this quality.
 #[cfg(test)]
 pub(crate) const QMAP_UNPLAYABLE_RESULT: i64 = 104_003;
-const LIBRARY_FALLBACK_ORIGIN: &str = "https://isure.stream.qqmusic.qq.com/";
-
-#[derive(Debug)]
-struct HiResFileType;
-
-impl FileTypeLike for HiResFileType {
-    fn s(&self) -> &'static str {
-        "RS01"
-    }
-
-    fn e(&self) -> &'static str {
-        ".flac"
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn playback_location_from_qmapi(
     result: i64,
@@ -77,6 +62,7 @@ pub(crate) fn playback_location_from_qmapi(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn sanitize_qmapi_playback_url(url: &str) -> Result<String, QQMusicError> {
     let parsed = reqwest::Url::parse(url).map_err(|_| QQMusicError::MalformedResponse)?;
     let host = parsed.host_str().ok_or(QQMusicError::MalformedResponse)?;
@@ -89,27 +75,7 @@ pub(crate) fn sanitize_qmapi_playback_url(url: &str) -> Result<String, QQMusicEr
     normalize_cdn_url(&origin, &path)
 }
 
-fn clear_file_type(filename: &str) -> Option<&'static (dyn FileTypeLike + Send + Sync)> {
-    if filename.starts_with("RS01") && filename.ends_with(".flac") {
-        Some(&HiResFileType)
-    } else if filename.starts_with("F000") && filename.ends_with(".flac") {
-        Some(&SongFileType::Flac)
-    } else if filename.starts_with("M800") && filename.ends_with(".mp3") {
-        Some(&SongFileType::Mp3_320)
-    } else if filename.starts_with("M500") && filename.ends_with(".mp3") {
-        Some(&SongFileType::Mp3_128)
-    } else if filename.starts_with("C400") && filename.ends_with(".m4a") {
-        Some(&SongFileType::Acc96)
-    } else if filename.starts_with("RS02") && filename.ends_with(".mp3") {
-        Some(&SpecialSongFileType::Try)
-    } else {
-        None
-    }
-}
-
-/// Full CDN URLs for playable clear candidates. Missing filenames were queried
-/// and are unplayable. Unsupported filename shapes fail closed before the
-/// library request.
+/// Map host credentials and consume typed library playback sources.
 pub(crate) async fn clear_playable_urls(
     track_id: &str,
     media_mid: &str,
@@ -117,63 +83,30 @@ pub(crate) async fn clear_playable_urls(
     uin: Option<&str>,
     cookie_header: Option<&str>,
 ) -> Result<HashMap<String, String>, QQMusicError> {
-    if filenames.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let mut infos = Vec::with_capacity(filenames.len());
-    for filename in filenames {
-        let file_type = clear_file_type(filename).ok_or(QQMusicError::MalformedResponse)?;
-        infos.push(
-            SongFileInfo::new(track_id)
-                .with_media_mid(media_mid)
-                .with_song_type(0)
-                .with_type_ref(file_type),
-        );
-    }
     let credential = match (uin, cookie_header) {
         (Some(uin), Some(cookie)) => {
             Some(credential_from_uin_and_cookie(uin, cookie, None, u64::MAX)?)
         }
         _ => None,
     };
-    tracing::debug!(
-        target: "qqmusic.vkey",
+    let client =
+        qmapi_client_with(credential.clone(), Some(Platform::Android)).map_err(map_qmapi_error)?;
+    let sources = qqmusic_api::playback::resolve_files(
+        &client.song,
         track_id,
         media_mid,
-        filenames = filenames.len(),
-        authenticated = credential.is_some(),
-        "library clear-vkey request"
-    );
-    let client =
-        qmapi_client_with(credential.clone(), Some(Platform::Android)).map_err(|error| {
-            let classification = map_qmapi_error(error);
-            tracing::warn!(
-                target: "qqmusic.vkey",
-                classification = classification.code(),
-                "library client construction failed"
-            );
-            classification
-        })?;
-    let response = client
-        .song
-        .get_song_urls(&infos, &SongFileType::Mp3_128, credential.as_ref())
-        .await
-        .map_err(|error| {
-            let classification = map_qmapi_error(error);
-            tracing::warn!(
-                target: "qqmusic.vkey",
-                classification = classification.code(),
-                "library get_song_urls failed"
-            );
-            classification
-        })?;
-    clear_urls_from_items(filenames, response.data)
+        filenames,
+        credential.as_ref(),
+        false,
+    )
+    .await
+    .map_err(map_qmapi_error)?;
+    Ok(sources
+        .into_iter()
+        .filter_map(|(filename, source)| source.url.map(|url| (filename, url)))
+        .collect())
 }
 
-/// Resolve encrypted playback candidates through the typed qm-api-rs
-/// `CgiGetEVkey` implementation.  The provider supplies only the candidate
-/// identifiers and account credentials; request signing, transport and
-/// response decoding stay inside qm-api-rs.
 pub(crate) async fn encrypted_playable_sources(
     track_id: &str,
     media_mid: &str,
@@ -181,109 +114,55 @@ pub(crate) async fn encrypted_playable_sources(
     uin: &str,
     cookie_header: &str,
 ) -> Result<HashMap<String, Option<(String, String)>>, QQMusicError> {
-    if filenames.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let mut infos = Vec::with_capacity(filenames.len());
-    for filename in filenames {
-        let quality =
-            encrypted_quality_for_filename(filename).ok_or(QQMusicError::MalformedResponse)?;
-        infos.push(
-            SongFileInfo::new(track_id)
-                .with_media_mid(media_mid)
-                .with_song_type(0)
-                .with_type_ref(quality.file_type(true)),
-        );
-    }
     let credential = credential_from_uin_and_cookie(uin, cookie_header, None, u64::MAX)?;
     let client = qmapi_client_with(Some(credential.clone()), Some(Platform::Android))
         .map_err(map_qmapi_error)?;
-    let response = client
-        .song
-        .get_song_urls(
-            &infos,
-            SongQuality::Master.file_type(true),
-            Some(&credential),
-        )
-        .await
-        .map_err(map_qmapi_error)?;
-
-    let requested = filenames.iter().map(String::as_str).collect::<HashSet<_>>();
-    if requested.len() != filenames.len() {
-        return Err(QQMusicError::MalformedResponse);
-    }
-    let mut results = filenames
-        .iter()
-        .map(|filename| (filename.clone(), None))
-        .collect::<HashMap<_, _>>();
-    let mut seen = HashSet::with_capacity(response.data.len());
-    for item in response.data {
-        if item.filename.trim().is_empty()
-            || !requested.contains(item.filename.as_str())
-            || !seen.insert(item.filename.clone())
-        {
-            return Err(QQMusicError::MalformedResponse);
-        }
-        if item.result != 0 || item.purl.trim().is_empty() || item.ekey.trim().is_empty() {
-            continue;
-        }
-        let joined = if item.purl.starts_with("https://") || item.purl.starts_with("http://") {
-            item.purl
-        } else {
-            format!(
-                "{LIBRARY_FALLBACK_ORIGIN}{}",
-                item.purl.trim_start_matches('/')
-            )
-        };
-        let url = sanitize_qmapi_playback_url(&joined)?;
-        results.insert(item.filename, Some((url, item.ekey)));
-    }
-    Ok(results)
+    let sources = qqmusic_api::playback::resolve_files(
+        &client.song,
+        track_id,
+        media_mid,
+        filenames,
+        Some(&credential),
+        true,
+    )
+    .await
+    .map_err(map_qmapi_error)?;
+    Ok(sources
+        .into_iter()
+        .map(|(filename, source)| (filename, source.url.zip(source.ekey)))
+        .collect())
 }
 
+#[cfg(test)]
+fn clear_file_type(
+    filename: &str,
+) -> Option<&'static (dyn qqmusic_api::modules::song::FileTypeLike + Send + Sync)> {
+    let kind = qqmusic_api::playback::PlaybackFile::from_filename(filename)?;
+    let file_type = kind.file_type();
+    (!file_type.is_encrypted()).then_some(file_type)
+}
+
+#[cfg(test)]
 fn encrypted_quality_for_filename(filename: &str) -> Option<SongQuality> {
-    match filename.get(..4) {
-        Some("AIM0") if filename.ends_with(".mflac") => Some(SongQuality::Master),
-        Some("F0M0") if filename.ends_with(".mflac") => Some(SongQuality::Flac),
+    match qqmusic_api::playback::PlaybackFile::from_filename(filename)? {
+        qqmusic_api::playback::PlaybackFile::Master => Some(SongQuality::Master),
+        qqmusic_api::playback::PlaybackFile::EncryptedLossless => Some(SongQuality::Flac),
         _ => None,
     }
 }
 
+#[cfg(test)]
 fn clear_urls_from_items(
     filenames: &[String],
     items: Vec<UrlinfoItem>,
 ) -> Result<HashMap<String, String>, QQMusicError> {
-    let requested = filenames.iter().map(String::as_str).collect::<HashSet<_>>();
-    if requested.len() != filenames.len() {
-        return Err(QQMusicError::MalformedResponse);
-    }
-
-    let mut seen = HashSet::with_capacity(items.len());
-    let mut urls = HashMap::new();
-    for item in items {
-        let filename = item.filename.as_str();
-        if filename.trim().is_empty()
-            || !requested.contains(filename)
-            || !seen.insert(filename.to_owned())
-        {
-            return Err(QQMusicError::MalformedResponse);
-        }
-        if item.result != 0 || item.purl.trim().is_empty() {
-            continue;
-        }
-        let joined = if item.purl.starts_with("https://") || item.purl.starts_with("http://") {
-            item.purl
-        } else {
-            format!(
-                "{LIBRARY_FALLBACK_ORIGIN}{}",
-                item.purl.trim_start_matches('/')
-            )
-        };
-        let sanitized = sanitize_qmapi_playback_url(&joined)?;
-        urls.insert(filename.to_owned(), sanitized);
-    }
-    Ok(urls)
+    Ok(
+        qqmusic_api::playback::sources_from_items(filenames, items, false)
+            .map_err(map_qmapi_error)?
+            .into_iter()
+            .filter_map(|(filename, source)| source.url.map(|url| (filename, url)))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

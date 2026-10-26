@@ -13,12 +13,16 @@ npm ci
 npm run dev
 ```
 
-The full Electron desktop and Rust workspace link the public `qm-api-rs` crate (`qqmusic-api`) as an unconditional
+The full Electron desktop and Rust workspace declare the `qm-api-rs` crate (`qqmusic-api`) as an unconditional
 production dependency, pinned at
-`75f6e4d392f6d3e64608fb48e2480fb0087009e3`. A sibling checkout at `../qm-api-rs`
+`bab630d44901f80cae47dd0f09314950d0028e23`. A sibling checkout at `../qm-api-rs`
 is checked against that pin by `node scripts/ci/qm-api-rs-access.mjs --check`.
-See [provider readiness](docs/release/provider-readiness.md) and [CI](docs/ci.md) for the production boundary and
+See [release requirements](docs/release/README.md) and [CI](docs/ci.md) for the production boundary and
 release gates.
+
+Normal builds resolve the pinned Git revision directly without a sibling override.
+When changing library protocols, see [local protocol development](docs/development.md#optional-local-protocol-development)
+for an optional machine-local sibling checkout.
 
 Run the complete desktop with:
 

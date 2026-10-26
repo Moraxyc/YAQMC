@@ -47,6 +47,8 @@ import { isAccountMusicProvider, type MusicProvider } from './providers/music-pr
 import { AndroidBottomNav, Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { PlayerBar } from './components/PlayerBar';
+import { CommentsPanel } from './components/CommentsPanel';
+import { useCommentsPanelStore } from './application/comments-panel-store';
 import { QueuePanel } from './components/QueuePanel';
 import { ApplicationContextMenu } from './components/ApplicationContextMenu';
 import { LyricsPanel } from './components/LyricsPanel';
@@ -275,6 +277,10 @@ export default function App() {
     let disposed = false;
     let removeListener: (() => Promise<void>) | null = null;
     void CapacitorApp.addListener('backButton', () => {
+      if (useCommentsPanelStore.getState().song) {
+        useCommentsPanelStore.getState().close();
+        return;
+      }
       const player = usePlayerStore.getState();
       const presentation = useLyricsPresentationStore.getState();
       const stage = useLyricsStageStore.getState().stage;
@@ -550,26 +556,6 @@ export default function App() {
       providerSelection.providers.find((candidate) => candidate.id === catalogRouteProviderId)
         ?.displayName ?? catalogRouteProviderId;
     pageContent = <MissingEntity message={t('providerUnavailable', { provider: providerLabel })} />;
-  } else if (
-    catalogRoute &&
-    catalogRouteProvider?.id === provider.id &&
-    catalog.status === 'loading'
-  ) {
-    pageContent = <LoadingState />;
-  } else if (
-    catalogRoute &&
-    catalogRouteProvider?.id === provider.id &&
-    catalog.status === 'error'
-  ) {
-    pageContent = (
-      <div className="empty-state empty-state--error">
-        <h1>{t('musicUnavailable')}</h1>
-        <p>{catalog.message}</p>
-        <button type="button" className="button button--primary" onClick={catalog.retry}>
-          {common('retry')}
-        </button>
-      </div>
-    );
   } else if (catalogRoute && catalogRouteProvider) {
     const activeCatalog = catalogRouteProvider.id === provider.id && catalog.status === 'ready';
     pageContent = (
@@ -597,6 +583,17 @@ export default function App() {
         onNavigate={catalogRouteNavigate}
       />
     );
+  } else if (route.page === 'search') {
+    pageContent = (
+      <SearchPage
+        key={`search:${route.query ?? ''}`}
+        initialQuery={route.query}
+        feed={catalog.status === 'ready' ? catalog.home : null}
+        onNavigate={navigate}
+      />
+    );
+  } else if (route.page === 'explore') {
+    pageContent = <ExplorePage onNavigate={navigate} />;
   } else if (catalog.status === 'loading') {
     pageContent = <LoadingState />;
   } else if (catalog.status === 'error') {
@@ -613,19 +610,6 @@ export default function App() {
     switch (route.page) {
       case 'home':
         pageContent = <HomePage feed={catalog.home} onNavigate={navigate} />;
-        break;
-      case 'search':
-        pageContent = (
-          <SearchPage
-            key={`search:${route.query ?? ''}`}
-            initialQuery={route.query}
-            feed={catalog.home}
-            onNavigate={navigate}
-          />
-        );
-        break;
-      case 'explore':
-        pageContent = <ExplorePage onNavigate={navigate} />;
         break;
       case 'album':
       case 'song':
@@ -682,6 +666,7 @@ export default function App() {
           <PluginNoticeHost />
           <CoreStatusBanner />
           <QueuePanel />
+          <CommentsPanel />
           <LyricsPanel
             focus={focusSidebarCollapsed}
             fullscreen={fullscreen}

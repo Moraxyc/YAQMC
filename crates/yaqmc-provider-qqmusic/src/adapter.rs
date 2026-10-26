@@ -325,6 +325,7 @@ impl api::ProviderAccount for QQMusicService {
             .map_err(provider_error)?;
         let result = qqmusic::OAuthPrepareResult::from_launch(local_provider, launch);
         Ok(api::OAuthPrepareResult {
+            browser_session: None,
             attempt_id: result.attempt_id,
             url: result.url,
             mobile_url: result.mobile_url,
@@ -416,6 +417,9 @@ impl api::ProviderAccount for QQMusicService {
 
 #[async_trait]
 impl api::MusicProvider for QQMusicService {
+    fn comments_provider(&self) -> Option<&dyn api::CommentsProvider> {
+        Some(self)
+    }
     fn id(&self) -> &str {
         "qqmusic"
     }
@@ -625,6 +629,31 @@ impl api::MusicProvider for QQMusicService {
 
     async fn remember_songs(&self, songs: &[api::Song]) {
         QQMusicService::remember_songs(self, songs).await;
+    }
+}
+
+#[async_trait]
+impl api::CommentsProvider for QQMusicService {
+    async fn song_comments(
+        &self,
+        request: api::SongCommentsRequest,
+    ) -> api::ProviderResult<api::SongCommentsPage> {
+        request.validate()?;
+        QQMusicService::song_comments(self, request)
+            .await
+            .map_err(provider_error)?
+            .bounded()
+    }
+
+    async fn song_comments_with_cancellation(
+        &self,
+        request: api::SongCommentsRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> api::ProviderResult<api::SongCommentsPage> {
+        QQMusicService::song_comments_with_cancellation(self, request, cancellation)
+            .await
+            .map_err(provider_error)?
+            .bounded()
     }
 }
 

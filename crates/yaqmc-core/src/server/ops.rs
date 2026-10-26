@@ -44,6 +44,34 @@ use super::HostDispatchHooks;
 
 pub const PERF_LOG_MAX_BYTES: u64 = 1 << 20;
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppCacheStats {
+    #[serde(flatten)]
+    cache: yaqmc_provider_api::CacheStats,
+    component_bytes: u64,
+    component_entries: u64,
+}
+
+pub fn app_cache_stats(core: &CoreHandle, clear: bool) -> Result<AppCacheStats, String> {
+    #[cfg(feature = "plugins")]
+    let (component_bytes, component_entries) = core.plugins().inspect_component_cache(clear)?;
+    #[cfg(not(feature = "plugins"))]
+    let (component_bytes, component_entries) = (0, 0);
+    let mut cache = if clear {
+        core.storage().clear()
+    } else {
+        core.storage().stats()
+    }
+    .map_err(stringify)?;
+    cache.total_bytes = cache.total_bytes.saturating_add(component_bytes);
+    Ok(AppCacheStats {
+        cache,
+        component_bytes,
+        component_entries,
+    })
+}
+
 struct StoragePreferences<'a> {
     storage: &'a StorageService,
 }

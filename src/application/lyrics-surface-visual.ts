@@ -37,13 +37,20 @@ export function drivePercentageClock(
   property: string,
   from01: number,
   remainingMs: number,
+  maxDurationMs = MAX_CSS_CLOCK_MS,
 ): void {
   if (!node) return;
   const from = `${Math.max(0, Math.min(1, from01)) * 100}%`;
   node.style.transition = 'none';
   node.style.setProperty(property, from);
   void node.offsetWidth;
-  if (!surfaceVisualActive() || remainingMs <= 16 || remainingMs > MAX_CSS_CLOCK_MS) return;
+  if (
+    !surfaceVisualActive() ||
+    !Number.isFinite(remainingMs) ||
+    remainingMs <= 16 ||
+    remainingMs > maxDurationMs
+  )
+    return;
   node.style.transition = `${property} ${Math.round(remainingMs)}ms linear`;
   node.style.setProperty(property, '100%');
 }

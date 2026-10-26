@@ -87,9 +87,14 @@ import { usePreferencesStore, type SecondaryLyricVisibility } from '../applicati
 import { ProviderContext } from '../application/provider-context';
 import { joinArtistNames } from '../utils/format';
 import { LyricsScene } from './lyrics-scene';
+import {
+  autoPortraitScene,
+  commitOrientedPreset,
+  projectPresetForOrientation,
+} from '../application/lyrics-scene-layout';
 import type { LyricsSceneBindings } from './lyrics-scene';
 
-const PREVIEW_FRAMES: LyricsPreviewFrame[] = ['desktop', 'window'];
+const PREVIEW_FRAMES: LyricsPreviewFrame[] = ['desktop', 'portrait', 'window'];
 const PRESET_NAME_KEYS = ['classic', 'immersive', 'vinyl', 'custom'] as const;
 const RESIZE_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const;
 type ResizeHandle = (typeof RESIZE_HANDLES)[number];
@@ -262,8 +267,10 @@ export function LyricsPresetEditor({
   const amll = usePreferencesStore((state) => state.amll);
   const updateLyrics = usePreferencesStore((state) => state.updateLyrics);
   const source = resolveLyricsPreset(lyricsPresets, presetId);
-  const [draft, setDraft] = useState<LyricsPresetDefinition>(source);
-  const [frame, setFrame] = useState<LyricsPreviewFrame>('desktop');
+  const [canonicalDraft, setDraft] = useState<LyricsPresetDefinition>(source);
+  const [frame, setFrame] = useState<LyricsPreviewFrame>(() =>
+    window.innerHeight > window.innerWidth ? 'portrait' : 'desktop',
+  );
   const [savePrompt, setSavePrompt] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -279,6 +286,13 @@ export function LyricsPresetEditor({
     width: typeof window === 'undefined' ? 1920 : window.innerWidth,
     height: typeof window === 'undefined' ? 1080 : window.innerHeight,
   }));
+  const logical = useMemo(() => logicalSceneSize(frame, windowSize), [frame, windowSize]);
+  const portrait = logical.height > logical.width;
+  const draft = useMemo(
+    () => projectPresetForOrientation(canonicalDraft, portrait),
+    [canonicalDraft, portrait],
+  );
+  const canonicalRef = useRef(canonicalDraft);
   const openedDraft = useRef(source);
   const gesture = useRef<{
     kind: 'move' | 'resize';
@@ -309,17 +323,34 @@ export function LyricsPresetEditor({
     draftRef.current = draft;
   }, [draft]);
 
-  const assignDraft = useCallback((next: LyricsPresetDefinition) => {
-    draftRef.current = next;
-    setDraft(next);
-  }, []);
+  const toCanonical = useCallback(
+    (next: LyricsPresetDefinition) => commitOrientedPreset(next, canonicalRef.current, portrait),
+    [portrait],
+  );
+
+  const assignCanonical = useCallback(
+    (next: LyricsPresetDefinition) => {
+      canonicalRef.current = next;
+      draftRef.current = projectPresetForOrientation(next, portrait);
+      setDraft(next);
+    },
+    [portrait],
+  );
+
+  const assignDraft = useCallback(
+    (next: LyricsPresetDefinition) => {
+      assignCanonical(toCanonical(next));
+    },
+    [assignCanonical, toCanonical],
+  );
 
   const commit = (next: LyricsPresetDefinition, snapshot = draftRef.current) => {
     if (presetsEqualForHistory(snapshot, next)) {
       assignDraft(next);
       return;
     }
-    setPast((current) => pushComposerHistory(current, snapshot));
+    const previous = toCanonical(snapshot);
+    setPast((current) => pushComposerHistory(current, previous));
     setFuture([]);
     assignDraft(next);
   };
@@ -383,17 +414,19 @@ export function LyricsPresetEditor({
   const undo = () => {
     const snapshot = past.at(-1);
     if (!snapshot) return;
+    const currentDraft = clonePresetDraft(canonicalRef.current);
     setPast((current) => current.slice(0, -1));
-    setFuture((current) => [clonePresetDraft(draftRef.current), ...current]);
-    assignDraft(snapshot);
+    setFuture((current) => [currentDraft, ...current]);
+    assignCanonical(snapshot);
   };
 
   const redo = () => {
     const snapshot = future[0];
     if (!snapshot) return;
+    const currentDraft = clonePresetDraft(canonicalRef.current);
     setFuture((current) => current.slice(1));
-    setPast((current) => pushComposerHistory(current, draftRef.current));
-    assignDraft(snapshot);
+    setPast((current) => pushComposerHistory(current, currentDraft));
+    assignCanonical(snapshot);
   };
 
   useEffect(() => {
@@ -445,7 +478,7 @@ export function LyricsPresetEditor({
 
   const applyToSlot = () => {
     updateLyricsPresets((current) =>
-      applyOverride(current, presetId, patchFromDefinition(draftRef.current)),
+      applyOverride(current, presetId, patchFromDefinition(canonicalRef.current)),
     );
     logger.info('lyrics.preset.save', 'applied lyrics preset configuration', {
       id: presetId,
@@ -459,7 +492,7 @@ export function LyricsPresetEditor({
     const name = newName.trim() || undefined;
     updateLyricsPresets((current) => {
       const created = saveAsNewPreset(current, presetId, {
-        patch: patchFromDefinition(draftRef.current),
+        patch: patchFromDefinition(canonicalRef.current),
         name,
       });
       createdId = created.id;
@@ -476,7 +509,7 @@ export function LyricsPresetEditor({
     let createdId = '';
     updateLyricsPresets((current) => {
       const created = saveAsNewPreset(current, presetId, {
-        patch: patchFromDefinition(draftRef.current),
+        patch: patchFromDefinition(canonicalRef.current),
         name: `${presetLabel} copy`,
       });
       createdId = created.id;
@@ -497,7 +530,7 @@ export function LyricsPresetEditor({
 
   const requestClose = () => {
     if (gesture.current) return;
-    if (!presetsEqualForHistory(openedDraft.current, draftRef.current)) {
+    if (!presetsEqualForHistory(openedDraft.current, canonicalRef.current)) {
       setConfirmDiscard(true);
       return;
     }
@@ -581,7 +614,6 @@ export function LyricsPresetEditor({
     ],
   );
 
-  const logical = useMemo(() => logicalSceneSize(frame, windowSize), [frame, windowSize]);
   const fit = useMemo(() => composerStageFit(available, logical, zoom), [available, logical, zoom]);
   const viewRef = useRef({ fit, logical, aspect: sceneAspectRatio(logical) });
   useEffect(() => {
@@ -690,7 +722,8 @@ export function LyricsPresetEditor({
       /* capture may already be released */
     }
     if (current.dragging && !presetsEqualForHistory(current.snapshot, draftRef.current)) {
-      setPast((history) => pushComposerHistory(history, current.snapshot));
+      const previous = toCanonical(current.snapshot);
+      setPast((history) => pushComposerHistory(history, previous));
       setFuture([]);
       logger.info(
         current.kind === 'move' ? 'lyrics.composer.drag' : 'lyrics.composer.resize',
@@ -698,7 +731,7 @@ export function LyricsPresetEditor({
         { id: current.id },
       );
     }
-  }, [flushPendingMove, onPointerMove, onPointerUp]);
+  }, [flushPendingMove, onPointerMove, onPointerUp, toCanonical]);
 
   useEffect(() => {
     endGestureRef.current = endGesture;
@@ -817,7 +850,9 @@ export function LyricsPresetEditor({
               type="button"
               className="button button--quiet"
               aria-pressed={frame === option}
-              onClick={() => setFrame(option)}
+              onClick={() => {
+                if (!gesture.current) setFrame(option);
+              }}
             >
               {t(`frames.${option}`)}
             </button>
@@ -1185,6 +1220,9 @@ export function LyricsPresetEditor({
                         resetSceneWidgetPosition(
                           draftRef.current,
                           selectedId as Exclude<SceneWidgetId, 'background'>,
+                          portrait
+                            ? autoPortraitScene(factoryScene(draftRef.current.layout))
+                            : undefined,
                         ),
                       )
                     }
@@ -1197,7 +1235,17 @@ export function LyricsPresetEditor({
                 <button
                   type="button"
                   className="button button--quiet"
-                  onClick={() => commit(resetSceneWidget(draftRef.current, selectedId))}
+                  onClick={() =>
+                    commit(
+                      resetSceneWidget(
+                        draftRef.current,
+                        selectedId,
+                        portrait
+                          ? autoPortraitScene(factoryScene(draftRef.current.layout))
+                          : undefined,
+                      ),
+                    )
+                  }
                 >
                   {t('resetWidget')}
                 </button>

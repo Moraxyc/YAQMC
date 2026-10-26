@@ -166,20 +166,27 @@ describe('native player runtime', () => {
     expect(usePlayerStore.getState().sourceSelection).toBeNull();
   });
 
-  it('maps the player quality command to the immediate native preference command', async () => {
-    nativeMocks.invoke.mockResolvedValue(snapshot('current', 2_000));
-    render(createElement(RuntimeHarness));
-    await waitFor(() => expect(nativeMocks.snapshotHandler).not.toBeNull());
-    nativeMocks.invoke.mockClear();
+  it.each(['qqmusic', 'plugin.netease', 'plugin.kugou'])(
+    'routes %s quality changes to the current track scope',
+    async (providerId) => {
+      const current = snapshot('current', 2_000);
+      current.queue[0]!.provider = { providerId, profileId: 'personal', trackId: 'current' };
+      nativeMocks.invoke.mockResolvedValue(current);
+      render(createElement(RuntimeHarness));
+      await waitFor(() => expect(nativeMocks.snapshotHandler).not.toBeNull());
+      nativeMocks.invoke.mockClear();
 
-    usePlayerStore.getState().setQuality('master');
+      usePlayerStore.getState().setQuality('master');
 
-    await waitFor(() =>
-      expect(nativeMocks.invoke).toHaveBeenCalledWith('qqmusic_set_current_quality', {
-        quality: 'master',
-      }),
-    );
-  });
+      await waitFor(() =>
+        expect(nativeMocks.invoke).toHaveBeenCalledWith('provider_set_current_quality', {
+          providerId,
+          profileId: 'personal',
+          quality: 'master',
+        }),
+      );
+    },
+  );
 
   it('projects authoritative queue entry identity and playback order', async () => {
     const one = track('one');

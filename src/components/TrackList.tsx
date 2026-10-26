@@ -15,7 +15,9 @@ import { useTranslation } from 'react-i18next';
 import { dispatchPluginUiAction } from '../application/plugin-runtime';
 import { usePluginUiSnapshot } from '../application/plugin-ui';
 import { EntityLink } from './EntityLink';
+import { TrackAccessBadge } from './TrackAccessBadge';
 import { useSongShareActions } from '../application/use-song-share-actions';
+import { useCommentsPanelStore } from '../application/comments-panel-store';
 import type { ContinuationKind } from '@yaqmc/client';
 
 interface TrackListProps {
@@ -107,6 +109,8 @@ function TrackRow({
   const addToQueue = usePlayerStore((state) => state.addToQueue);
   const addToPlaylist = useAddToPlaylistPicker(track);
   const share = useSongShareActions(track);
+  const { t: comments } = useTranslation('lyrics', { keyPrefix: 'comments' });
+  const openComments = () => useCommentsPanelStore.getState().open(track);
   const actionsRef = useRef<HTMLSpanElement>(null);
   const { favorite, pending } = useFavoriteState(track.id, track.isFavorite);
   const hasUsableTrackId = track.id.trim().length > 0;
@@ -155,6 +159,7 @@ function TrackRow({
     ? [
         { id: 'play', label: playbackAction, action: activateTrack },
         { id: 'queue', label: t('addToQueue'), action: () => addToQueue(track) },
+        { id: 'comments', label: comments('open'), action: openComments },
         {
           id: 'add-to-playlist',
           label: addToPlaylist.label,
@@ -237,9 +242,12 @@ function TrackRow({
         )}
       </span>
       <span className="track-row__primary" role="cell">
-        <EntityLink entity={titleEntity} id={titleEntityId} className="track-row__title">
-          {track.title}
-        </EntityLink>
+        <span className="track-row__title-line">
+          <EntityLink entity={titleEntity} id={titleEntityId} className="track-row__title">
+            {track.title}
+          </EntityLink>
+          <TrackAccessBadge song={track} />
+        </span>
         <span className="track-row__artist">
           {track.artists.map((artist, artistIndex) => (
             <span key={`${artist.id}-${artistIndex}`}>
@@ -285,6 +293,7 @@ function TrackRow({
             </IconButton>
             <ActionMenu label={t('moreActions', { title: track.title })} size="small">
               <ActionMenuItem onClick={() => addToQueue(track)}>{t('addToQueue')}</ActionMenuItem>
+              <ActionMenuItem onClick={openComments}>{comments('open')}</ActionMenuItem>
               <ActionMenuItem disabled={!addToPlaylist.available} onClick={openAddToPlaylist}>
                 {addToPlaylist.label}
               </ActionMenuItem>

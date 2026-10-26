@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { LyricDocument } from '../domain/music';
 import { buildLyricsRenderModel } from './lyrics-render-model';
+import { loadTraditionalLyrics } from './lyrics-text';
+
+beforeAll(loadTraditionalLyrics);
 
 function document(overrides: Partial<LyricDocument> = {}): LyricDocument {
   return {
@@ -17,6 +20,33 @@ function document(overrides: Partial<LyricDocument> = {}): LyricDocument {
 }
 
 describe('buildLyricsRenderModel', () => {
+  it('uses Traditional Chinese for timed words and translations in the shared render model', () => {
+    const model = buildLyricsRenderModel(
+      document({
+        lines: [
+          {
+            id: 'traditional',
+            startMs: 0,
+            endMs: 1000,
+            text: '头发',
+            translation: '随风',
+            words: [
+              { startMs: 0, endMs: 500, text: '头' },
+              { startMs: 500, endMs: 1000, text: '发' },
+            ],
+          },
+        ],
+      }),
+      'show',
+      'hide',
+      'traditional',
+    );
+    expect(model.lines[0]?.words).toEqual([
+      { startTimeMs: 0, endTimeMs: 500, text: '頭' },
+      { startTimeMs: 500, endTimeMs: 1000, text: '髮' },
+    ]);
+    expect(model.lines[0]?.translatedLyric).toBe('隨風');
+  });
   it('preserves the existing word-synced AMLL presentation semantics', () => {
     const model = buildLyricsRenderModel(
       document({

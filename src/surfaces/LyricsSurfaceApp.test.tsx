@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { HostBridge } from '@yaqmc/client';
 import {
   defaultPreferences,
@@ -7,6 +7,9 @@ import {
   type LyricSurfaceSettings,
 } from '../application/preferences';
 import type { LyricLine } from '../domain/music';
+import { loadTraditionalLyrics } from '../application/lyrics-text';
+
+beforeAll(loadTraditionalLyrics);
 import {
   DesktopSurface,
   IslandSurface,
@@ -48,6 +51,88 @@ const line = (text: string): LyricLine => ({
   startMs: 0,
   endMs: 1_000,
   words: [],
+});
+
+function wordProps(positionMs: number, isPlaying = false): SurfaceProps {
+  const current: LyricLine = {
+    ...line('头发'),
+    endMs: 6000,
+    translation: '随风',
+    words: [
+      { startMs: 0, endMs: 200, text: '头' },
+      { startMs: 700, endMs: 6000, text: '发' },
+    ],
+  };
+  return {
+    kind: 'desktop',
+    settings: defaultPreferences.surfaces.desktop,
+    document: {
+      songId: 'song',
+      syncMode: 'word',
+      metadata: { sourceLabel: 'test', offsetMs: 0 },
+      vocalists: [],
+      lines: [current],
+    },
+    current,
+    next: null,
+    wordIndex: positionMs < 700 ? -1 : 1,
+    projection: {
+      receivedAt: performance.now(),
+      value: {
+        timestampMs: 0,
+        currentTrack: null,
+        positionMs,
+        isPlaying,
+        playbackState: isPlaying ? 'playing' : 'paused',
+        playbackDurationMs: 10000,
+        syncMode: 'word',
+        lineIndex: 0,
+        wordIndex: -1,
+        currentLine: current,
+        nextLine: null,
+      },
+    },
+  };
+}
+
+describe('Surface lyric text and timing', () => {
+  it('keeps completed words highlighted during a gap with no current word', () => {
+    const { container } = render(<DesktopSurface {...wordProps(500)} />);
+    const words = container.querySelectorAll<HTMLElement>('.surface-word');
+    expect(words[0]).toHaveAttribute('data-state', 'complete');
+    expect(words[0]?.style.getPropertyValue('--word-progress')).toBe('100%');
+    expect(words[1]).toHaveAttribute('data-state', 'future');
+    expect(words[1]?.style.getPropertyValue('--word-progress')).toBe('0%');
+  });
+
+  it('freezes sustained-word progress when paused and drives it when playing', () => {
+    const data = wordProps(1000);
+    const { container, rerender } = render(<DesktopSurface {...data} />);
+    const word = container.querySelectorAll<HTMLElement>('.surface-word')[1]!;
+    expect(Number.parseFloat(word.style.getPropertyValue('--word-progress'))).toBeCloseTo(
+      (300 / 5300) * 100,
+    );
+    expect(word.style.transition).toBe('none');
+    rerender(<DesktopSurface {...wordProps(1000, true)} />);
+    expect(word.style.transition).toMatch(
+      /--word-progress 49\d\dms linear|--word-progress 5000ms linear/,
+    );
+  });
+
+  it('converts both surface types and translations without changing the source', () => {
+    usePreferencesStore.setState({
+      lyrics: { ...defaultPreferences.lyrics, chineseScript: 'traditional', translation: 'show' },
+    });
+    const data = wordProps(500);
+    const { container, rerender } = render(<DesktopSurface {...data} />);
+    expect(container.querySelector('.lyrics-surface__primary')?.textContent).toBe('頭頭髮髮');
+    expect(screen.getByText('隨風')).toBeInTheDocument();
+    rerender(
+      <IslandSurface {...data} kind="island" settings={defaultPreferences.surfaces.island} />,
+    );
+    expect(container.querySelector('.lyrics-surface__primary')?.textContent).toBe('頭頭髮髮');
+    expect(data.current?.text).toBe('头发');
+  });
 });
 
 function props(

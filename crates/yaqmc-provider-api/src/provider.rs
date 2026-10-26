@@ -122,6 +122,18 @@ pub trait ProviderAccount: Send + Sync {
         attempt_id: &str,
         callback_url: reqwest::Url,
     ) -> ProviderResult<AccountSnapshot>;
+    async fn complete_browser_session_login(
+        &self,
+        _attempt_id: &str,
+        _callback_url: reqwest::Url,
+        _cookies: Vec<crate::BrowserSessionCookie>,
+    ) -> ProviderResult<AccountSnapshot> {
+        Err(crate::ProviderCommandError {
+            code: "unsupported-operation".to_owned(),
+            message: "this provider does not support browser session login".to_owned(),
+            retryable: false,
+        })
+    }
     async fn cancel_oauth_login(&self, attempt_id: &str) -> ProviderResult<AccountSnapshot>;
     async fn heartbeat_qr_login(
         &self,
@@ -234,6 +246,10 @@ pub trait MusicProvider: PlaybackSourceResolver + ProviderAccount + Send + Sync 
         self.id()
     }
     fn account(&self) -> &dyn ProviderAccount;
+    /// Optional read-only comments capability for retained built-in providers.
+    fn comments_provider(&self) -> Option<&dyn crate::CommentsProvider> {
+        None
+    }
     fn media_http_client(&self) -> reqwest::Client;
     fn capabilities(&self) -> CatalogProviderCapabilities;
     async fn status(&self) -> ProviderStatus;

@@ -61,10 +61,12 @@ export function useCatalog(): CatalogState {
 
     void Promise.all([provider.getHome(controller.signal), provider.getLibrary(controller.signal)])
       .then(([home, library]) => {
+        if (controller.signal.aborted) return;
         setState({ status: 'ready', home, library, message: null });
         void provider
           .getHome(controller.signal, true)
           .then((refreshedHome) => {
+            if (controller.signal.aborted) return;
             setState((current) =>
               current.status === 'ready' ? { ...current, home: refreshedHome } : current,
             );
@@ -77,13 +79,15 @@ export function useCatalog(): CatalogState {
         if (error instanceof DOMException && error.name === 'AbortError') return;
         const message =
           error instanceof ProviderError
-            ? error.code === 'offline'
-              ? t('offline')
-              : error.code === 'timeout'
-                ? t('timeout')
-                : error.code === 'rate-limited'
-                  ? t('rateLimited')
-                  : t('catalogFailed')
+            ? error.code === 'unsupported-operation'
+              ? t('catalogUnsupported')
+              : error.code === 'offline'
+                ? t('offline')
+                : error.code === 'timeout'
+                  ? t('timeout')
+                  : error.code === 'rate-limited'
+                    ? t('rateLimited')
+                    : t('catalogFailed')
             : t('catalogFailed');
         setState({
           status: 'error',
@@ -107,6 +111,7 @@ export function useCatalog(): CatalogState {
     void provider
       .getHome(controller.signal, true)
       .then((home) => {
+        if (controller.signal.aborted) return;
         setState((current) => (current.status === 'ready' ? { ...current, home } : current));
       })
       .catch(() => {

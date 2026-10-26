@@ -36,6 +36,29 @@ afterEach(() => {
 });
 
 describe('LyricsPresetPicker', () => {
+  it('edits and saves portrait geometry without overwriting landscape, including undo across frames', () => {
+    const original = resolveLyricsPreset(defaultLyricsPresetState);
+    render(<LyricsPresetPicker />);
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Portrait 9:16' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Artwork' }));
+    expect(screen.getByRole('spinbutton', { name: 'Position X' })).toHaveValue(50);
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Position X' }), {
+      target: { value: '44' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Desktop 16:9' }));
+    expect(screen.getByRole('spinbutton', { name: 'Position X' })).toHaveValue(22.5);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Portrait 9:16' }));
+    expect(screen.getByRole('spinbutton', { name: 'Position X' })).toHaveValue(50);
+    fireEvent.click(screen.getByRole('button', { name: 'Redo' }));
+    expect(screen.getByRole('spinbutton', { name: 'Position X' })).toHaveValue(44);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to this preset' }));
+    const saved = resolveLyricsPreset(usePreferencesStore.getState().lyricsPresets);
+    expect(saved.scene).toMatchObject(original.scene);
+    expect(saved.portraitScene?.artwork.x).toBe(0.44);
+  });
   it('shows the three built-in presets and keeps typography controls in Settings', () => {
     render(<LyricsPresetPicker />);
     expect(screen.getByRole('radio', { name: 'Classic' })).toHaveAttribute('aria-checked', 'true');
@@ -120,10 +143,7 @@ describe('LyricsPresetPicker', () => {
   });
 
   it('commits one undo step for a drag and saves inspector geometry into runtime resolve', () => {
-    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
-      callback(0);
-      return 1;
-    });
+    vi.stubGlobal('requestAnimationFrame', () => 1);
     vi.stubGlobal('cancelAnimationFrame', () => undefined);
     try {
       render(<LyricsPresetPicker />);
@@ -229,10 +249,7 @@ describe('LyricsPresetPicker', () => {
   });
 
   it('drags lyrics from the widget and keeps the selection', () => {
-    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
-      callback(0);
-      return 1;
-    });
+    vi.stubGlobal('requestAnimationFrame', () => 1);
     vi.stubGlobal('cancelAnimationFrame', () => undefined);
     try {
       render(<LyricsPresetPicker />);

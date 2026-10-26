@@ -230,7 +230,11 @@ export function QueuePanel() {
               data-queue-entry-id={current.id}
               data-provider-unavailable={!currentAvailable || undefined}
             >
-              <Artwork artwork={current.track.artwork} purpose="small" />
+              <Artwork
+                artwork={current.track.artwork}
+                provider={current.track.provider}
+                purpose="small"
+              />
               <div>
                 <EntityLink
                   entity="song"

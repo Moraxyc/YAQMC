@@ -50,7 +50,7 @@ describe('useProviderSettings', () => {
     );
   });
 
-  it('refreshes, mutates quality, and clears cache for the active provider only', async () => {
+  it('refreshes and mutates quality for the active provider only', async () => {
     const hook = renderHook(({ id, profile }) => useProviderSettings(id, profile), {
       initialProps: { id: 'provider.a', profile: 'default' },
     });
@@ -59,21 +59,12 @@ describe('useProviderSettings', () => {
       providerId: 'provider.a',
       profileId: 'default',
     });
-    expect(invoke).toHaveBeenCalledWith('provider_cache_stats', {
-      providerId: 'provider.a',
-      profileId: 'default',
-    });
 
     await act(async () => hook.result.current.setQuality('lossless'));
-    await act(async () => hook.result.current.clearCache());
     expect(invoke).toHaveBeenCalledWith('provider_set_preferred_quality', {
       providerId: 'provider.a',
       profileId: 'default',
       quality: 'lossless',
-    });
-    expect(invoke).toHaveBeenCalledWith('provider_clear_cache', {
-      providerId: 'provider.a',
-      profileId: 'default',
     });
 
     hook.rerender({ id: 'provider.b', profile: 'default' });
@@ -85,20 +76,12 @@ describe('useProviderSettings', () => {
     expect(invoke).not.toHaveBeenCalledWith('qqmusic_status');
   });
 
-  it('keeps provider status available on Android when cache stats fail', async () => {
+  it('does not delegate app cache management to the active provider', async () => {
     testRuntime.android = true;
-    invoke.mockImplementation(
-      async (method: string, params?: { providerId?: string; profileId?: string }) => {
-        if (method === 'provider_cache_stats') throw new Error('cache unavailable');
-        return response(method, params);
-      },
-    );
-
     const hook = renderHook(() => useProviderSettings('provider.android', 'default'));
-
     await waitFor(() => expect(hook.result.current.status?.providerId).toBe('provider.android'));
-    expect(hook.result.current.cache).toBeNull();
-    expect(hook.result.current.error).toBe('cache unavailable');
+    expect(hook.result.current.error).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith('provider_cache_stats', expect.anything());
     expect(invoke).not.toHaveBeenCalledWith('audio_output_devices');
   });
 
@@ -107,13 +90,8 @@ describe('useProviderSettings', () => {
 
     await waitFor(() => expect(hook.result.current.status?.providerId).toBe('provider.a'));
     await act(async () => hook.result.current.setQuality('lossless'));
-    await act(async () => hook.result.current.clearCache());
 
     expect(invoke).toHaveBeenCalledWith('provider_status', {
-      providerId: 'provider.a',
-      profileId: 'alternate',
-    });
-    expect(invoke).toHaveBeenCalledWith('provider_cache_stats', {
       providerId: 'provider.a',
       profileId: 'alternate',
     });
@@ -121,10 +99,6 @@ describe('useProviderSettings', () => {
       providerId: 'provider.a',
       profileId: 'alternate',
       quality: 'lossless',
-    });
-    expect(invoke).toHaveBeenCalledWith('provider_clear_cache', {
-      providerId: 'provider.a',
-      profileId: 'alternate',
     });
   });
 
@@ -152,22 +126,10 @@ describe('useProviderSettings', () => {
         profileId: 'alternate',
       }),
     );
-    pending.get('provider_cache_stats:alternate')?.(
-      response('provider_cache_stats', {
-        providerId: 'provider.a',
-        profileId: 'alternate',
-      }),
-    );
     await waitFor(() => expect(hook.result.current.status?.profileId).toBe('alternate'));
 
     pending.get('provider_status:default')?.(
       response('provider_status', {
-        providerId: 'provider.a',
-        profileId: 'default',
-      }),
-    );
-    pending.get('provider_cache_stats:default')?.(
-      response('provider_cache_stats', {
         providerId: 'provider.a',
         profileId: 'default',
       }),

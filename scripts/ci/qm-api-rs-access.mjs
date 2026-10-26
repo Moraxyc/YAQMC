@@ -1,8 +1,10 @@
 /**
- * Integrity helper for the public `qm-api-rs` production pin.
+ * Integrity helper for the reviewed `qm-api-rs` dependency revision.
  *
  * The `qqmusic-api` dependency is unconditional since the production cutover; the
  * provider has no backend feature split and Core links it by default.
+ * Local development may use an ignored sibling override; release graph checks
+ * separately require the pinned Git source.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -11,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 export const QM_API_RS_GIT = 'https://github.com/YAQMC/qm-api-rs.git';
 export const QM_API_RS_ORIGIN = 'https://github.com/YAQMC/qm-api-rs';
-export const QM_API_RS_REV = '75f6e4d392f6d3e64608fb48e2480fb0087009e3';
+export const QM_API_RS_REV = 'bab630d44901f80cae47dd0f09314950d0028e23';
 export const QM_API_RS_CRATE = 'qqmusic-api';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');

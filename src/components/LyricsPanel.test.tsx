@@ -10,6 +10,7 @@ import '../styles/components.css';
 import '../styles/lyrics-scene.css';
 import '../styles/platform.css';
 import { LyricsPanel } from './LyricsPanel';
+import * as sceneAssets from '../application/plugin-asset';
 
 const layout = vi.hoisted(() => ({ compact: false }));
 vi.mock('../application/use-compact-player-layout', () => ({
@@ -100,6 +101,30 @@ describe('LyricsPanel', () => {
     expect(container.querySelector('.amll-lyric-player.dom')).toBeInTheDocument();
   });
 
+  it('settles portrait resource loading instead of restarting it after every internal render', async () => {
+    useLyricsStore.setState({ document: unsynchronizedDocument(), status: 'ready' });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains('lyrics-scene')
+        ? new DOMRect(0, 0, 1080, 1920)
+        : new DOMRect();
+    });
+    let loads = 0;
+    const assets = vi.spyOn(sceneAssets, 'resolveSceneAssetUrl').mockImplementation(() => {
+      loads += 1;
+      // Bound a regression's microtask loop so the test fails without hanging.
+      return loads <= 2 ? Promise.resolve(null) : new Promise<string | null>(() => {});
+    });
+    const { container } = render(<LyricsPanel {...props()} />);
+    await act(async () => {});
+    expect(container.querySelector('.lyrics-scene')).toHaveAttribute(
+      'data-orientation',
+      'portrait',
+    );
+    expect(assets.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
   it('reveals auto-hidden lyrics controls when a touch pointer presses the stage', () => {
     vi.useFakeTimers();
     useLyricsStore.setState({ document: unsynchronizedDocument(), status: 'ready' });
@@ -174,6 +199,11 @@ describe('LyricsPanel', () => {
 
     expect(screen.getByText(/no lyrics found|暂无歌词|歌词不可用/i)).toBeInTheDocument();
     expect(container.querySelector('.amll-lyric-player')).toBeNull();
+    const message = container.querySelector<HTMLElement>('.lyrics-stage__message')!;
+    expect(getComputedStyle(message).color).toContain('--lyrics-foreground');
+    expect(getComputedStyle(message.querySelector('strong')!).color).toContain(
+      '--lyrics-foreground',
+    );
   });
 
   it('keeps one lyrics surface through the entrance without a duplicate song header', () => {

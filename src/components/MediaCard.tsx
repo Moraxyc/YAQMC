@@ -1,4 +1,6 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useContext, useState, type ReactNode } from 'react';
+import { ProviderContext } from '../application/provider-context';
+import { usePlayerStore } from '../application/player-store';
 import { Play } from 'lucide-react';
 import type { Album, Artwork as ArtworkModel, Playlist, Song } from '../domain/music';
 import { Artwork } from './ui/Artwork';
@@ -44,9 +46,26 @@ export function MediaCard({
   artworkFallback,
 }: MediaCardProps) {
   const { t } = useTranslation('pages', { keyPrefix: 'home' });
+  const { t: errors } = useTranslation('errors');
+  const provider = useContext(ProviderContext);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const play = () => {
+    if (!provider || type === 'song' || (item as Album | Playlist).tracks.length > 0) {
+      onPlay();
+      return;
+    }
+    if (loading) return;
+    setLoading(true);
+    setFailed(false);
+    void (type === 'album' ? provider.getAlbum(item.id) : provider.getPlaylist(item.id))
+      .then((collection) => usePlayerStore.getState().playTracks(collection.tracks))
+      .catch(() => setFailed(true))
+      .finally(() => setLoading(false));
+  };
   const items: readonly ContextMenuItem[] = [
     { id: 'open', label: t('openItem', { title: item.title }), action: onOpen },
-    { id: 'play', label: t('playItem', { title: item.title }), action: onPlay },
+    { id: 'play', label: t('playItem', { title: item.title }), action: play },
   ];
   const contextMenu = useContextMenu(t('itemActions', { title: item.title }), items);
   const displayTitle = title ?? item.title;
@@ -106,7 +125,8 @@ export function MediaCard({
         <button
           type="button"
           className="media-card__play"
-          onClick={onPlay}
+          onClick={play}
+          disabled={loading}
           aria-label={t('playItem', { title: item.title })}
         >
           <Play size={17} fill="currentColor" />
@@ -120,6 +140,7 @@ export function MediaCard({
         <div className="media-card__meta">{metadata}</div>
       )}
       {contextMenu.menu}
+      {failed && <span role="status">{errors('catalogFailed')}</span>}
     </article>
   );
 }

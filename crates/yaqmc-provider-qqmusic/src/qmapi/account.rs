@@ -2,7 +2,6 @@
 //! The provider retains business-result mapping and safe-read reconciliation.
 
 use qqmusic_api::{account::AccountWrite, Client};
-use serde_json::Value;
 
 use crate::qmapi::cgi::map_qmapi_error;
 use crate::qqmusic::QQMusicError;
@@ -13,62 +12,13 @@ pub(crate) async fn execute_account_write(
     operation: AccountWrite,
     cancellation: tokio_util::sync::CancellationToken,
 ) -> Result<bool, QQMusicError> {
-    let operation_kind = match &operation {
-        AccountWrite::FavoriteSong { .. } => "favorite-song",
-        AccountWrite::PlaylistTracks { .. } => "playlist-tracks",
-        AccountWrite::CreatePlaylist { .. } => "create-playlist",
-        AccountWrite::DeletePlaylist { .. } => "delete-playlist",
-        AccountWrite::EditPlaylist { .. } => "edit-playlist",
-        AccountWrite::CollectPlaylist { .. } => "collect-playlist",
-    };
-    let track_write = matches!(
-        &operation,
-        AccountWrite::FavoriteSong { .. } | AccountWrite::PlaylistTracks { .. }
-    );
-    let reply = qqmusic_api::account::write(client, credential, operation, cancellation)
+    match qqmusic_api::account::write_checked(client, credential, operation, cancellation)
         .await
-        .map_err(|error| {
-            let mapped = map_write_error(error);
-            tracing::warn!(
-                target: "qqmusic.account",
-                operation_kind,
-                classification = ?mapped,
-                "library typed write failed"
-            );
-            mapped
-        })?;
-    if reply.code != 0 {
-        let mapped = map_qmapi_error(reply.error());
-        tracing::warn!(
-            target: "qqmusic.account",
-            operation_kind,
-            code = reply.code,
-            "library write returned a non-success CGI code"
-        );
-        if matches!(mapped, QQMusicError::SchemaChanged) {
-            if let Some(disposition) =
-                playlist_write_business_disposition(track_write, reply.code, &reply.data)
-            {
-                return disposition;
-            }
-        }
-        return Err(mapped);
-    }
-    match account_write_accepted(&reply.data) {
-        Ok(accepted) => Ok(accepted),
-        Err(QQMusicError::SchemaChanged) => {
-            let (data_kind, data_keys, result_kind) = response_shape(&reply.data);
-            tracing::warn!(
-                target: "qqmusic.account",
-                operation_kind,
-                data_kind,
-                data_keys = ?data_keys,
-                result_kind,
-                "library write acceptance was unconfirmed; reconciling with a safe read"
-            );
-            Err(QQMusicError::OutcomeUnknown)
-        }
-        Err(error) => Err(error),
+        .map_err(map_write_error)?
+    {
+        qqmusic_api::account::WriteOutcome::Accepted => Ok(true),
+        qqmusic_api::account::WriteOutcome::Rejected => Ok(false),
+        qqmusic_api::account::WriteOutcome::Unknown => Err(QQMusicError::OutcomeUnknown),
     }
 }
 
@@ -89,85 +39,6 @@ fn map_write_error(error: qqmusic_api::QmError) -> QQMusicError {
     match map_qmapi_error(error) {
         QQMusicError::Offline | QQMusicError::Timeout => QQMusicError::OutcomeUnknown,
         other => other,
-    }
-}
-
-fn playlist_write_business_disposition(
-    track_write: bool,
-    code: i64,
-    data: &Value,
-) -> Option<Result<bool, QQMusicError>> {
-    if !track_write {
-        return None;
-    }
-    if code == 80092 {
-        return Some(Ok(false));
-    }
-    let ret_code = data
-        .get("retCode")
-        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()));
-    (code == 80105 && ret_code == Some(0)).then_some(Err(QQMusicError::OutcomeUnknown))
-}
-
-fn account_write_accepted(data: &Value) -> Result<bool, QQMusicError> {
-    let failed = ["v_failedPlaylistId", "v_failTids"].into_iter().any(|key| {
-        data.get(key)
-            .and_then(Value::as_array)
-            .is_some_and(|values| !values.is_empty())
-    });
-    if failed {
-        return Ok(false);
-    }
-    let ret_code = data
-        .get("retCode")
-        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()));
-    if ret_code.is_some_and(|code| code != 0) {
-        return Ok(false);
-    }
-    if let Some(update_time) = data
-        .pointer("/result/updateTime")
-        .or_else(|| data.get("updateTime"))
-    {
-        return valid_update_time(update_time)
-            .then_some(true)
-            .ok_or(QQMusicError::SchemaChanged);
-    }
-    let code = ret_code
-        .or_else(|| {
-            data.get("result")
-                .filter(|value| !value.is_object())
-                .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
-        })
-        .ok_or(QQMusicError::SchemaChanged)?;
-    Ok(code == 0)
-}
-
-fn valid_update_time(value: &Value) -> bool {
-    value
-        .as_u64()
-        .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
-        .is_some_and(|value| value > 0)
-}
-
-fn response_shape(data: &Value) -> (&'static str, Vec<String>, &'static str) {
-    let data_kind = value_kind(data);
-    let mut data_keys: Vec<String> = data
-        .as_object()
-        .map(|object| object.keys().cloned().collect())
-        .unwrap_or_default();
-    data_keys.sort();
-    let result_kind = data.get("result").map(value_kind).unwrap_or("missing");
-    (data_kind, data_keys, result_kind)
-}
-
-fn value_kind(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
     }
 }
 
@@ -607,59 +478,5 @@ mod tests {
             ));
             assert_eq!(transport.count(), 1);
         }
-    }
-
-    #[test]
-    fn typed_bridge_classifies_write_results_without_bypassing_reconciliation() {
-        assert!(account_write_accepted(&serde_json::json!({ "retCode": 0 })).unwrap());
-        assert!(!account_write_accepted(&serde_json::json!({ "retCode": 1 })).unwrap());
-        assert!(account_write_accepted(&serde_json::json!({
-            "result": { "updateTime": 1 }
-        }))
-        .unwrap());
-        assert!(!account_write_accepted(&serde_json::json!({
-            "result": 0,
-            "v_failedPlaylistId": [88]
-        }))
-        .unwrap());
-        assert!(!account_write_accepted(&serde_json::json!({
-            "result": { "updateTime": 1 },
-            "v_failedPlaylistId": [],
-            "v_failTids": [42]
-        }))
-        .unwrap());
-        assert!(!account_write_accepted(&serde_json::json!({
-            "retCode": 1,
-            "result": { "updateTime": 1 }
-        }))
-        .unwrap());
-        for invalid_update_time in [
-            serde_json::Value::Null,
-            serde_json::json!(0),
-            serde_json::json!(""),
-        ] {
-            assert!(matches!(
-                account_write_accepted(&serde_json::json!({
-                    "result": { "updateTime": invalid_update_time }
-                })),
-                Err(QQMusicError::SchemaChanged)
-            ));
-        }
-        assert!(account_write_accepted(&serde_json::json!({
-            "result": { "updateTime": "1800000000" }
-        }))
-        .unwrap());
-        assert!(matches!(
-            account_write_accepted(&serde_json::json!({ "result": {} })),
-            Err(QQMusicError::SchemaChanged)
-        ));
-        assert_eq!(
-            response_shape(&serde_json::json!({ "result": {}, "opaque": true })),
-            (
-                "object",
-                vec!["opaque".to_owned(), "result".to_owned()],
-                "object"
-            )
-        );
     }
 }

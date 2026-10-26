@@ -55,6 +55,7 @@ pub struct ComponentHostContext {
     namespace: Arc<str>,
     allowed_origins: Arc<HashSet<String>>,
     state: Arc<NamespaceState>,
+    settings: Arc<serde_json::Value>,
     revoked: Arc<AtomicBool>,
 }
 
@@ -66,6 +67,68 @@ struct CredentialRecord {
 }
 
 impl ComponentHostServices {
+    /// Host-only maintenance over disposable cache files. KV, credentials and
+    /// settings live in data_root and are deliberately outside this traversal.
+    pub(crate) fn inspect_cache(&self, clear: bool) -> Result<(u64, u64), String> {
+        let _filesystem = self
+            .inner
+            .filesystem
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let mut bytes = 0u64;
+        let mut count = 0u64;
+        for namespace in fs::read_dir(&self.inner.cache_root)
+            .map_err(|_| "component cache could not be inspected".to_owned())?
+        {
+            let namespace =
+                namespace.map_err(|_| "component cache could not be inspected".to_owned())?;
+            let name = namespace.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let kind = namespace
+                .file_type()
+                .map_err(|_| "component cache could not be inspected".to_owned())?;
+            if !kind.is_dir()
+                || kind.is_symlink()
+                || name.len() != 64
+                || !name
+                    .bytes()
+                    .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+            {
+                continue;
+            }
+            // A namespace is a single flat directory of hashed .cache files.
+            for entry in fs::read_dir(namespace.path())
+                .map_err(|_| "component cache could not be inspected".to_owned())?
+            {
+                let entry =
+                    entry.map_err(|_| "component cache could not be inspected".to_owned())?;
+                let kind = entry
+                    .file_type()
+                    .map_err(|_| "component cache could not be inspected".to_owned())?;
+                let path = entry.path();
+                if !kind.is_file()
+                    || kind.is_symlink()
+                    || path.extension().is_none_or(|v| v != "cache")
+                {
+                    continue;
+                }
+                if clear {
+                    fs::remove_file(path)
+                        .map_err(|_| "component cache could not be cleared".to_owned())?;
+                } else {
+                    bytes = bytes.saturating_add(
+                        entry
+                            .metadata()
+                            .map_err(|_| "component cache could not be inspected".to_owned())?
+                            .len(),
+                    );
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        Ok((bytes, count))
+    }
+
     pub fn open(
         data_root: PathBuf,
         cache_root: PathBuf,
@@ -96,6 +159,21 @@ impl ComponentHostServices {
         provider_id: &str,
         allowed_origins: HashSet<String>,
     ) -> ComponentHostContext {
+        self.for_plugin_with_settings(
+            plugin_id,
+            provider_id,
+            allowed_origins,
+            serde_json::json!({}),
+        )
+    }
+
+    pub fn for_plugin_with_settings(
+        &self,
+        plugin_id: &str,
+        provider_id: &str,
+        allowed_origins: HashSet<String>,
+        settings: serde_json::Value,
+    ) -> ComponentHostContext {
         let namespace = namespace_id(plugin_id, provider_id);
         let state = {
             let mut namespaces = self
@@ -119,6 +197,7 @@ impl ComponentHostServices {
             namespace: Arc::from(namespace),
             allowed_origins: Arc::new(allowed_origins),
             state,
+            settings: Arc::new(settings),
             revoked: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -219,6 +298,12 @@ impl ComponentHostContext {
 
     pub fn allowed_origins(&self) -> &HashSet<String> {
         &self.allowed_origins
+    }
+
+    pub fn settings_get(&self) -> Result<String, String> {
+        self.ensure_active()?;
+        serde_json::to_string(self.settings.as_ref())
+            .map_err(|_| "component settings could not be encoded".to_owned())
     }
 
     pub fn runtime(&self) -> &tokio::runtime::Handle {
@@ -494,6 +579,14 @@ impl ComponentHostContext {
         self.services.inner.started.elapsed().as_millis() as u64
     }
 
+    pub fn unix_millis(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
+    }
+
     pub fn random_bytes(&self, length: u32) -> Result<Vec<u8>, String> {
         self.ensure_active()?;
         let length = length as usize;
@@ -672,6 +765,48 @@ mod tests {
         assert_eq!(first.cache_get("b").expect("get"), Some(b"5678".to_vec()));
         assert!(first.kv_delete("key").expect("delete"));
         assert!(!first.kv_delete("key").expect("delete missing"));
+    }
+
+    #[tokio::test]
+    async fn host_cache_maintenance_counts_all_namespaces_and_preserves_account_data() {
+        let root = tempfile::tempdir().unwrap();
+        let services = services(&root);
+        let origin = "https://accounts.example.com";
+        let first = services.for_plugin(
+            "example.music",
+            "netease",
+            HashSet::from([origin.to_owned()]),
+        );
+        let second = services.for_plugin("example.music", "kugou", HashSet::new());
+        first.cache_put("artwork", b"12345").unwrap();
+        second.cache_put("lyrics", b"123").unwrap();
+        first.kv_set("session-handle", "saved").unwrap();
+        let handle = first.credential_create(origin, "synthetic-secret").unwrap();
+        assert_eq!(services.inspect_cache(false).unwrap(), (8, 2));
+        // Settings/private KV and unknown files are never considered disposable.
+        let unknown = services
+            .cache_namespace_path(&first.namespace)
+            .join("keep.json");
+        fs::write(&unknown, "keep").unwrap();
+        let foreign = services.inner.cache_root.join("unrelated");
+        fs::create_dir(&foreign).unwrap();
+        fs::write(foreign.join("keep.cache"), "keep").unwrap();
+        assert_eq!(services.inspect_cache(true).unwrap(), (0, 0));
+        assert_eq!(services.inspect_cache(false).unwrap(), (0, 0));
+        assert_eq!(first.cache_get("artwork").unwrap(), None);
+        assert_eq!(second.cache_get("lyrics").unwrap(), None);
+        assert_eq!(
+            first.kv_get("session-handle").unwrap().as_deref(),
+            Some("saved")
+        );
+        assert_eq!(
+            first.credential_resolve(&handle, origin).unwrap(),
+            "synthetic-secret"
+        );
+        assert!(unknown.is_file());
+        assert!(foreign.join("keep.cache").is_file());
+        first.cache_put("new-artwork", b"new").unwrap();
+        assert_eq!(services.inspect_cache(false).unwrap(), (3, 1));
     }
 
     #[tokio::test]

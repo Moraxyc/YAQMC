@@ -19,13 +19,14 @@ Unknown origin, NOASSERTION, missing immutable revision, incomplete target mappi
 extraction without authorization are release blockers. Corresponding-source delivery is necessary where GPL applies,
 but it does not cure missing copyright permission.
 
-The complete audit state is in
-[docs/release/provenance-ledger.json](docs/release/provenance-ledger.json) and
-[docs/release/provenance.md](docs/release/provenance.md).
+The complete audit state remains in the maintainer's local
+`docs/release/provenance-ledger.json` and `docs/release/provenance.md` files.
+These private reports are excluded from Git; see the
+[release requirements](docs/release/README.md).
 The typed maintainer-approval digest is
 [docs/release/licensing-consent-record.json](docs/release/licensing-consent-record.json).
-The linked `qm-api-rs` (`qqmusic-api`) crate is covered by its separate
-[provenance record](docs/release/qm-api-rs-provenance.md).
+The linked `qm-api-rs` (`qqmusic-api`) crate requires its separate local
+`docs/release/qm-api-rs-provenance.md` review.
 
 ## Maintainer records
 
@@ -40,7 +41,7 @@ signed commit or GitHub issue/PR comment URL) and date beside each approval.
 
 ## Current status
 
-**In-tree ledger: pass.** `npm run provenance:enforce` is the machine check for this tree. Unused names that were
-previously recorded as ports (miaosic, `mzj3920/qqmusic-decrypt`, and official QQ Music Electron ASAR) are out of
-the in-tree ledger. QMCDecode remains as an independent MIT adaptation with file/range
-mappings in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+`npm run provenance:enforce` must validate the private evidence before a release.
+A checkout without that evidence does not establish a passing status. QMCDecode's
+MIT copyright and license notices remain in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

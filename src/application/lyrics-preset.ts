@@ -1,5 +1,6 @@
 import type { LyricCoverLayout } from './preferences';
 import { logger } from './logger';
+import { normalizeWordAnimation, type LyricWordAnimation } from './lyrics-word-animation';
 
 export const LYRICS_PRESET_SCHEMA_VERSION = 2 as const;
 export const LYRICS_SCENE_RENDERER_VERSION = 1 as const;
@@ -35,7 +36,7 @@ export type LyricsArtworkRenderer = 'square' | 'rounded' | 'vinyl';
 export type LyricsBackgroundFit = 'cover' | 'contain';
 export type LyricsBackgroundKind =
   'color' | 'artwork' | 'image' | 'gradient' | 'video' | 'colorField';
-export type LyricsPreviewFrame = 'desktop' | 'window' | 'ultrawide';
+export type LyricsPreviewFrame = 'desktop' | 'portrait' | 'window' | 'ultrawide';
 export type WidgetAnchor =
   | 'top-left'
   | 'top-center'
@@ -165,6 +166,7 @@ export interface LyricsWidget extends WidgetTransform {
   kind: 'lyrics';
   align: LyricsAlign;
   followAnchor: number;
+  wordAnimation?: LyricWordAnimation;
 }
 
 export interface TransportWidget extends WidgetTransform {
@@ -211,9 +213,11 @@ export interface LyricsPresetDefinition {
   artwork: LyricsPresetArtwork;
   background: LyricsPresetBackground;
   scene: LyricsSceneLayout;
+  portraitScene?: LyricsSceneLayout;
 }
 
 export type LyricsPresetPatch = {
+  portraitScene?: LyricsSceneLayout;
   typography?: Partial<LyricsPresetTypography>;
   artwork?: Partial<LyricsPresetArtwork>;
   background?: Partial<LyricsPresetBackground>;
@@ -479,13 +483,21 @@ export function clampFollowAnchor(value: number): number {
   return Math.min(0.85, Math.max(0.15, value));
 }
 
-export function resolvePrimaryFontSizePx(fontScale: number, containerHeightPx: number): number {
+export function resolvePrimaryFontSizePx(
+  fontScale: number,
+  containerHeightPx: number,
+  lyricsWidthPx = Infinity,
+): number {
   const height = Number.isFinite(containerHeightPx) ? Math.max(0, containerHeightPx) : 0;
   const fontBase = Math.min(
     LYRICS_FONT_BASE_MAX_PX,
     Math.max(LYRICS_FONT_BASE_MIN_PX, height * LYRICS_FONT_BASE_CQH),
   );
-  return fontBase * clampFontScale(fontScale);
+  const widthBase =
+    Number.isFinite(lyricsWidthPx) && lyricsWidthPx > 0
+      ? Math.max(LYRICS_FONT_BASE_MIN_PX, lyricsWidthPx / 16)
+      : fontBase;
+  return Math.min(fontBase, widthBase) * clampFontScale(fontScale);
 }
 
 export function resolveSecondaryFontSizePx(primaryPx: number): number {
@@ -799,6 +811,7 @@ export function normalizeScene(
         ...normalizeTransform(lyricsSource, factory.lyrics),
         id: 'lyrics',
         kind: 'lyrics',
+        wordAnimation: normalizeWordAnimation(lyricsSource.wordAnimation),
         align: isAlign(lyricsSource.align) ? lyricsSource.align : factory.lyrics.align,
         followAnchor: clampFollowAnchor(
           typeof lyricsSource.followAnchor === 'number'
@@ -870,6 +883,9 @@ function applyPatch(
       lineHeight: clampLineHeight(patch.typography?.lineHeight ?? base.typography.lineHeight),
     },
     scene: normalizeScene(merged, layout).scene,
+    portraitScene: patch.portraitScene
+      ? normalizeScene(patch.portraitScene, layout).scene
+      : base.portraitScene,
   };
   return syncDerived(next);
 }
@@ -886,6 +902,7 @@ export function patchFromDefinition(preset: LyricsPresetDefinition): LyricsPrese
     artwork: { ...preset.artwork },
     background: { ...preset.background },
     scene: cloneScene(preset.scene),
+    portraitScene: preset.portraitScene ? cloneScene(preset.portraitScene) : undefined,
   };
 }
 
@@ -938,6 +955,7 @@ export function mergePresetPatch(
     typography: { ...current?.typography, ...patch.typography },
     artwork: { ...current?.artwork, ...patch.artwork },
     background: { ...current?.background, ...patch.background },
+    portraitScene: patch.portraitScene ?? current?.portraitScene,
     scene,
   };
 }
@@ -1059,6 +1077,10 @@ function normalizeDefinition(value: unknown, fallbackId: string): LyricsPresetDe
     artwork: { style: artworkStyle },
     background: defaultBackground,
     scene: normalizedScene.scene,
+    portraitScene:
+      source.portraitScene && !normalizeScene(source.portraitScene, layout).malformed
+        ? normalizeScene(source.portraitScene, layout).scene
+        : undefined,
   });
 }
 
@@ -1102,6 +1124,10 @@ function normalizePatch(value: unknown): LyricsPresetPatch | null {
     } else {
       patch.scene = normalized.scene;
     }
+  }
+  if (source.portraitScene) {
+    const normalized = normalizeScene(source.portraitScene, patch.layout ?? 'split');
+    if (!normalized.malformed) patch.portraitScene = normalized.scene;
   }
   return patch;
 }
@@ -1178,16 +1204,17 @@ export function updateSceneWidget<K extends Exclude<SceneWidgetId, never>>(
 export function resetSceneWidget(
   preset: LyricsPresetDefinition,
   id: SceneWidgetId,
+  defaults = factoryScene(preset.layout),
 ): LyricsPresetDefinition {
-  const factory = factoryScene(preset.layout);
-  return updateSceneWidget(preset, id, factory[id] as Partial<LyricsSceneLayout[typeof id]>);
+  return updateSceneWidget(preset, id, defaults[id] as Partial<LyricsSceneLayout[typeof id]>);
 }
 
 export function resetSceneWidgetPosition(
   preset: LyricsPresetDefinition,
   id: Exclude<SceneWidgetId, 'background'>,
+  defaults = factoryScene(preset.layout),
 ): LyricsPresetDefinition {
-  const factory = factoryScene(preset.layout)[id];
+  const factory = defaults[id];
   return updateSceneWidget(preset, id, {
     x: factory.x,
     y: factory.y,

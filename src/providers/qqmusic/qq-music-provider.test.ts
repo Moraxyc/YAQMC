@@ -24,6 +24,22 @@ describe('QQMusicProvider', () => {
     expect(invoke).toHaveBeenCalledWith('qqmusic_library');
   });
 
+  it('routes comments to the built-in provider and exact profile', async () => {
+    const request = {
+      songId: 'qqmusic:track:mid',
+      sort: 'new' as const,
+      limit: 20,
+      cursor: 'page-2',
+      parentId: 'parent',
+    };
+    await provider.getComments(request);
+    expect(invoke).toHaveBeenCalledWith('provider_comments', {
+      providerId: 'qqmusic',
+      profileId: 'default',
+      request,
+    });
+  });
+
   it('forwards the typed artist catalog page without adding an upstream route', async () => {
     await provider.getArtistCatalog('qqmusic:artist:mid', 'album', undefined, 2, 8);
     expect(invoke).toHaveBeenCalledWith('qqmusic_artist_catalog', {

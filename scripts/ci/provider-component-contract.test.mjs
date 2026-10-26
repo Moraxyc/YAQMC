@@ -22,7 +22,7 @@ test('frozen Provider Component operations cover every Core dispatch', () => {
   const sourceOperations = sortedUnique(
     [
       ...providerSource.matchAll(
-        /"((?:account|catalog|lyrics|playback|recommendation)\.[a-z0-9.-]+)"/gu,
+        /"((?:account|catalog|comments|lyrics|playback|recommendation)\.[a-z0-9.-]+)"/gu,
       ),
     ].map((match) => match[1]),
   );
@@ -58,6 +58,7 @@ test('golden envelopes cover every v3 capability without exposing transport secr
     'playback.resolve',
     'recommendation.next',
     'lyrics.get',
+    'comments.list',
     'account.snapshot',
   ]);
   assert.deepEqual(
@@ -94,6 +95,7 @@ test('renderer IPC and local OpenAPI retain provider identity without exposing C
     'provider_search',
     'provider_recommendation_next',
     'provider_lyrics',
+    'provider_comments',
     'provider_account_login_methods',
     'provider_auth_oauth_start',
   ]) {

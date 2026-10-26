@@ -3,6 +3,11 @@
     reason = "account services consume these shared contracts in later tasks"
 )]
 
+use qqmusic_api::account::{
+    AccountPlaylistMetadata as RawAccountPlaylist,
+    OwnedPlaylistEditFields as RawOwnedPlaylistEditFields,
+};
+
 use super::{
     artwork::{artwork_from_provider_url, is_allowed_artwork_url},
     auth::{AuthenticatedAccountContext, QQMusicAuthService},
@@ -3331,21 +3336,6 @@ pub(crate) enum PlaylistEditSafetyError {
     TaggedRenameUnverified,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawOwnedPlaylistEditFields {
-    #[serde(default, rename = "dirId", alias = "dirid")]
-    provider_dir_id: Option<u64>,
-    #[serde(default, rename = "dirName")]
-    original_title: Option<String>,
-    #[serde(default, rename = "desc")]
-    description: Option<String>,
-    #[serde(default, rename = "picUrl")]
-    picture_url: Option<String>,
-    #[serde(default, rename = "tagNameList")]
-    tag_names: Option<Vec<String>>,
-}
-
 pub(crate) struct ProviderOwnedPlaylistEditSnapshot {
     pub(crate) provider_dir_id: u64,
     pub(crate) original_title: String,
@@ -3390,84 +3380,6 @@ fn parse_owned_playlist_edit_value(
     } else {
         Err(PlaylistEditSafetyError::TaggedRenameUnverified)
     }
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawPlaylistCreator {
-    #[serde(default, alias = "nickname")]
-    nick: String,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawPlaylistCapabilities {
-    #[serde(default)]
-    can_add: bool,
-    #[serde(default)]
-    can_remove: bool,
-    #[serde(default)]
-    can_rename: bool,
-    #[serde(default)]
-    can_delete: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawAccountPlaylist {
-    #[serde(
-        default,
-        rename = "tid",
-        alias = "disstid",
-        alias = "dissid",
-        alias = "id"
-    )]
-    tid: Option<Value>,
-    #[serde(default, rename = "dirId", alias = "dirid")]
-    dir_id: Option<u64>,
-    #[serde(default, rename = "playlistMid", alias = "playlist_mid", alias = "mid")]
-    playlist_mid: Option<String>,
-    #[serde(default, rename = "collectionType", alias = "source", alias = "type")]
-    collection_type: Option<Value>,
-    #[serde(
-        default,
-        rename = "dirName",
-        alias = "dissname",
-        alias = "title",
-        alias = "name"
-    )]
-    title: Option<String>,
-    #[serde(default, rename = "desc", alias = "description")]
-    description: Option<String>,
-    #[serde(
-        default,
-        rename = "picUrl",
-        alias = "picurl",
-        alias = "logo",
-        alias = "cover"
-    )]
-    picture_url: Option<String>,
-    #[serde(
-        default,
-        rename = "trackCount",
-        alias = "songnum",
-        alias = "songNum",
-        alias = "song_count",
-        alias = "song_cnt"
-    )]
-    track_count: u64,
-    #[serde(default, rename = "updateTime", alias = "update_time", alias = "mtime")]
-    updated_at_ms: Option<u64>,
-    #[serde(default)]
-    ownership: Option<String>,
-    #[serde(default, rename = "isOwner")]
-    is_owner: Option<bool>,
-    #[serde(default)]
-    creator: RawPlaylistCreator,
-    #[serde(default, alias = "nickname")]
-    nick: String,
-    #[serde(default)]
-    capabilities: RawPlaylistCapabilities,
 }
 
 fn normalize_playlist_value(value: &Value) -> Result<AccountPlaylistSummary, QQMusicError> {

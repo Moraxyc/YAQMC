@@ -227,6 +227,14 @@ mod catalog_shape_tests {
                 .expect("login flow deserializes"),
             AccountLoginFlow::OAuth
         );
+        assert_eq!(
+            serde_json::to_value(AccountLoginFlow::Qr).expect("QR flow serializes"),
+            json!("qr")
+        );
+        assert_eq!(
+            serde_json::from_value::<AccountLoginFlow>(json!("qr")).expect("QR flow deserializes"),
+            AccountLoginFlow::Qr
+        );
     }
 }
 
@@ -516,6 +524,8 @@ pub type ProviderResult<T> = Result<T, ProviderCommandError>;
 pub enum AccountLoginFlow {
     #[serde(rename = "oauth")]
     OAuth,
+    #[serde(rename = "qr")]
+    Qr,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -568,8 +578,36 @@ pub struct OAuthPrepareResult {
     pub navigation_allowlist: Vec<String>,
     pub external_navigation_rules: Vec<OAuthExternalNavigationRule>,
     pub callback_matcher: OAuthCallbackMatcher,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_session: Option<BrowserSessionPolicy>,
     #[serde(skip)]
     pub snapshot: crate::AccountSnapshot,
+}
+
+/// A fresh browser partition may hand only these music-service cookies to Core.
+/// Values never enter the renderer or the plugin's readable storage.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserSessionPolicy {
+    pub url: String,
+    pub cookie_names: Vec<String>,
+    pub required_cookie_names: Vec<String>,
+    pub credential_origins: Vec<String>,
+    pub format: BrowserSessionFormat,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BrowserSessionFormat {
+    Cookie,
+    KugouWeb,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserSessionCookie {
+    pub name: String,
+    pub value: String,
 }
 
 #[cfg(test)]

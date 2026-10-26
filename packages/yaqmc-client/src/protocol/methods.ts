@@ -82,6 +82,7 @@ import type {
   Page,
 } from './dto';
 import type { PlatformAttach } from './types';
+import type { SongCommentsRequest, SongCommentsPage } from './dto';
 import type { OpenCatalogSongPayload } from './events';
 
 export const MIGRATED_METHOD_NAMES = [
@@ -111,6 +112,8 @@ export const MIGRATED_METHOD_NAMES = [
   'provider_artist_catalog',
   'provider_playlist',
   'provider_lyrics',
+  'provider_comments',
+  'provider_comments_cancel',
   'provider_recommendation_next',
   'provider_cache_artwork',
   'provider_set_preferred_quality',
@@ -136,6 +139,8 @@ export const MIGRATED_METHOD_NAMES = [
   'provider_auth_refresh',
   'provider_sign_out',
   'provider_cache_stats',
+  'app_cache_stats',
+  'app_clear_cache',
   'provider_clear_cache',
   'qqmusic_status',
   'qqmusic_home',
@@ -324,7 +329,14 @@ export type MethodParams = Exhaustive<{
     limit: number;
   };
   provider_playlist: { providerId: string; profileId?: string; id: string };
-  provider_lyrics: { providerId: string; profileId?: string; id: string };
+  provider_lyrics: { providerId: string; profileId?: string; id: string; requestId?: string };
+  provider_comments: {
+    providerId: string;
+    profileId?: string;
+    request: SongCommentsRequest;
+    requestId?: string;
+  };
+  provider_comments_cancel: { providerId: string; profileId?: string; requestId: string };
   provider_recommendation_next: {
     providerId: string;
     profileId?: string;
@@ -425,6 +437,8 @@ export type MethodParams = Exhaustive<{
   };
   provider_sign_out: { providerId: string; profileId?: string };
   provider_cache_stats: { providerId: string; profileId?: string };
+  app_cache_stats: void;
+  app_clear_cache: void;
   provider_clear_cache: { providerId: string; profileId?: string };
   qqmusic_status: void;
   qqmusic_home: { refresh: boolean };
@@ -442,7 +456,7 @@ export type MethodParams = Exhaustive<{
     limit: number;
   };
   qqmusic_playlist: { id: string };
-  qqmusic_lyrics: { songId: string };
+  qqmusic_lyrics: { songId: string; requestId?: string };
   catalog_share_song: { providerId: string; profileId?: string; id: string };
   qqmusic_cache_artwork: { url: string };
   qqmusic_set_preferred_quality: { quality: AudioQualityPreference };
@@ -568,6 +582,7 @@ export type MethodParams = Exhaustive<{
     profileId?: string;
     attemptId: string;
     callbackUrl: string;
+    browserSessionCookies?: Array<{ name: string; value: string }>;
   };
   provider_auth_oauth_cancel: { providerId: string; profileId?: string; attemptId: string };
   app_settings_get: { key: string };
@@ -611,6 +626,8 @@ export type MethodResult = Exhaustive<{
   provider_artist_catalog: ArtistCatalogPage;
   provider_playlist: Playlist;
   provider_lyrics: LyricDocument | null;
+  provider_comments: SongCommentsPage;
+  provider_comments_cancel: void;
   provider_recommendation_next: RecommendationBatch;
   provider_cache_artwork: string;
   provider_set_preferred_quality: ProviderStatus;
@@ -636,6 +653,8 @@ export type MethodResult = Exhaustive<{
   provider_auth_refresh: AccountSnapshot;
   provider_sign_out: AccountSnapshot;
   provider_cache_stats: CacheStats;
+  app_cache_stats: CacheStats;
+  app_clear_cache: CacheStats;
   provider_clear_cache: CacheStats;
   qqmusic_status: ProviderStatus;
   qqmusic_home: HomeFeed;

@@ -854,9 +854,17 @@ describe('IpcRouter host intercepts', () => {
         recentHistoryRead: true,
       },
     };
+    let navigate: ((event: { preventDefault(): void }, url: string) => void) | undefined;
     const oauthWindow = {
       webContents: {
-        on: vi.fn(),
+        on: vi.fn(
+          (
+            event: 'will-navigate' | 'will-redirect',
+            listener: (event: { preventDefault(): void }, url: string) => void,
+          ) => {
+            if (event === 'will-navigate') navigate = listener;
+          },
+        ),
         setWindowOpenHandler: vi.fn(),
       },
       loadURL: vi.fn(),
@@ -871,7 +879,7 @@ describe('IpcRouter host intercepts', () => {
       if (method === 'auth_oauth_prepare') {
         return prepared;
       }
-      if (method === 'qqmusic_account_snapshot') {
+      if (method === 'auth_oauth_complete') {
         return snapshot;
       }
       return { ok: true };
@@ -897,9 +905,14 @@ describe('IpcRouter host intercepts', () => {
     router.registerWindow(1, 'main');
     router.registerWindow(2, 'lyrics-desktop');
 
-    await expect(
-      router.invoke(1, { method: 'qqmusic_auth_oauth_start', params: { loginProvider: 'qq' } }),
-    ).resolves.toEqual({ ok: true, result: snapshot });
+    const authorization = router.invoke(1, {
+      method: 'qqmusic_auth_oauth_start',
+      params: { loginProvider: 'qq' },
+    });
+    await vi.waitFor(() => expect(oauthWindow.loadURL).toHaveBeenCalledWith(prepared.url));
+    const callbackUrl = `${prepared.callbackMatcher.urlPrefix}?code=authorized`;
+    navigate?.({ preventDefault: vi.fn() }, callbackUrl);
+    await expect(authorization).resolves.toEqual({ ok: true, result: snapshot });
     expect(invoke).toHaveBeenCalledWith('auth_oauth_prepare', { providerKind: 'qq' });
     expect(fromPartition).toHaveBeenCalledWith('oauth:attempt-0', { cache: false });
     expect(String(fromPartition.mock.calls[0]?.[0]).startsWith('persist:')).toBe(false);
@@ -911,8 +924,10 @@ describe('IpcRouter host intercepts', () => {
       show: true,
     });
     expect(createdOptions?.webPreferences).not.toHaveProperty('preload');
-    expect(oauthWindow.loadURL).toHaveBeenCalledWith(prepared.url);
-    expect(invoke).toHaveBeenCalledWith('qqmusic_account_snapshot');
+    expect(invoke).toHaveBeenCalledWith('auth_oauth_complete', {
+      attemptId: prepared.attemptId,
+      callbackUrl,
+    });
 
     invoke.mockClear();
     createWindow.mockClear();
@@ -947,9 +962,17 @@ describe('IpcRouter host intercepts', () => {
         recentHistoryRead: false,
       },
     };
+    let navigate: ((event: { preventDefault(): void }, url: string) => void) | undefined;
     const oauthWindow = {
       webContents: {
-        on: vi.fn(),
+        on: vi.fn(
+          (
+            event: 'will-navigate' | 'will-redirect',
+            listener: (event: { preventDefault(): void }, url: string) => void,
+          ) => {
+            if (event === 'will-navigate') navigate = listener;
+          },
+        ),
         setWindowOpenHandler: vi.fn(),
       },
       loadURL: vi.fn(),
@@ -962,7 +985,7 @@ describe('IpcRouter host intercepts', () => {
     }));
     const invoke = vi.fn<OAuthHostDeps['invoke']>(async (method) => {
       if (method === 'provider_auth_oauth_prepare') return prepared;
-      if (method === 'provider_account_snapshot') return snapshot;
+      if (method === 'provider_auth_oauth_complete') return snapshot;
       return { ok: true };
     });
     const handlers = createHostHandlers({
@@ -977,12 +1000,14 @@ describe('IpcRouter host intercepts', () => {
     router.registerWindow(1, 'main');
     router.registerWindow(2, 'lyrics-desktop');
 
-    await expect(
-      router.invoke(1, {
-        method: 'provider_auth_oauth_start',
-        params: { providerId: 'plugin.example', methodId: 'browser-oauth' },
-      }),
-    ).resolves.toEqual({ ok: true, result: snapshot });
+    const authorization = router.invoke(1, {
+      method: 'provider_auth_oauth_start',
+      params: { providerId: 'plugin.example', methodId: 'browser-oauth' },
+    });
+    await vi.waitFor(() => expect(oauthWindow.loadURL).toHaveBeenCalledWith(prepared.url));
+    const callbackUrl = `${prepared.callbackMatcher.urlPrefix}&code=authorized`;
+    navigate?.({ preventDefault: vi.fn() }, callbackUrl);
+    await expect(authorization).resolves.toEqual({ ok: true, result: snapshot });
     expect(invoke).toHaveBeenCalledWith('provider_auth_oauth_prepare', {
       providerId: 'plugin.example',
       methodId: 'browser-oauth',
@@ -990,10 +1015,11 @@ describe('IpcRouter host intercepts', () => {
     expect(fromPartition).toHaveBeenCalledWith('oauth:plugin.example:attempt-provider-0', {
       cache: false,
     });
-    expect(invoke).toHaveBeenCalledWith('provider_account_snapshot', {
+    expect(invoke).toHaveBeenCalledWith('provider_auth_oauth_complete', {
       providerId: 'plugin.example',
+      attemptId: prepared.attemptId,
+      callbackUrl,
     });
-    expect(oauthWindow.loadURL).toHaveBeenCalledWith(prepared.url);
 
     await expect(
       router.invoke(1, {

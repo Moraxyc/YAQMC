@@ -18,10 +18,12 @@ npm ci
 npm run dev
 ```
 
-完整的 Electron 桌面端和 Rust workspace 无条件链接公开 `qm-api-rs`（crate `qqmusic-api`），精确钉在
-`75f6e4d392f6d3e64608fb48e2480fb0087009e3`。本地若在 `../qm-api-rs` 有检出，运行
+完整的 Electron 桌面端和 Rust workspace 无条件依赖 `qm-api-rs`（crate `qqmusic-api`），manifest 精确钉在
+`bab630d44901f80cae47dd0f09314950d0028e23`。本地若在 `../qm-api-rs` 有检出，运行
 `node scripts/ci/qm-api-rs-access.mjs --check` 会核对该 HEAD。生产边界和发布门禁见
-[提供器 readiness](docs/release/provider-readiness.md)与 [CI 文档](docs/zh-CN/ci.md)。
+[发布检查要求](docs/release/README.md)与 [CI 文档](docs/zh-CN/ci.md)。
+
+正常构建直接使用上述固定的 Git 提交，无需相邻库覆盖。需要修改库协议时，可按[本地协议开发](docs/zh-CN/development.md#可选的本地协议开发)配置仅在本机生效的相邻检出。
 
 运行完整桌面端：
 

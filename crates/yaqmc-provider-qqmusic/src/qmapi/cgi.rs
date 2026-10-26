@@ -24,6 +24,7 @@ pub(crate) fn map_qmapi_error(error: QmError) -> QQMusicError {
         QmError::Http { status: 408, .. } => QQMusicError::Timeout,
         QmError::Http { .. } => QQMusicError::Offline,
         QmError::RateLimited => QQMusicError::RateLimited,
+        QmError::CgiApi { code: 10004, .. } => QQMusicError::Unavailable,
         QmError::CredentialExpired(_)
         | QmError::CredentialInvalid(_)
         | QmError::CredentialRefresh(_) => QQMusicError::AuthenticationExpired,

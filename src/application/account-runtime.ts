@@ -28,7 +28,14 @@ import { getHostBridge, getYaqmcClient } from './yaqmc-runtime';
 import { isAndroidRuntime } from './host-capabilities';
 
 export type AccountRuntimeError =
-  'network' | 'authorization' | 'secure-store' | 'protocol' | 'unknown';
+  | 'mobile-login-required'
+  | 'network'
+  | 'authorization'
+  | 'secure-store'
+  | 'protocol'
+  | 'unknown'
+  | 'backend'
+  | 'configuration';
 
 export type LibraryResourceError =
   'network' | 'protocol' | 'unsupported' | 'unavailable' | 'unknown';
@@ -106,6 +113,7 @@ interface AccountStoreState {
   refreshSnapshot: (provider: AccountMusicProvider) => Promise<void>;
   refreshAccount: (provider: AccountMusicProvider) => Promise<void>;
   startLogin: (provider: AccountMusicProvider, method: AccountLoginMethod) => Promise<void>;
+  startQrLogin: (provider: AccountMusicProvider) => Promise<void>;
   reopenLogin: (provider: AccountMusicProvider) => Promise<void>;
   heartbeatLogin: (provider: AccountMusicProvider) => Promise<void>;
   refreshQr: (provider: AccountMusicProvider) => Promise<void>;
@@ -480,6 +488,9 @@ function classifyError(error: unknown): AccountRuntimeError {
       : error && typeof error === 'object' && 'code' in error
         ? String((error as { code: unknown }).code)
         : null;
+  if (code === 'mobile-login-required') return 'mobile-login-required';
+  if (code === 'provider-backend-unavailable') return 'backend';
+  if (code === 'provider-not-configured') return 'configuration';
   if (code === 'offline' || code === 'timeout' || code === 'rate-limited') return 'network';
   if (code === 'authentication-expired' || code === 'authorization-rejected') {
     return 'authorization';
@@ -1321,6 +1332,16 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
       (snapshot) => releaseUncommittedOwnership(provider, snapshot),
     );
   },
+  startQrLogin: async (provider) => {
+    activateAccountScope(provider);
+    set({ dialogOpen: true, displayedQrImageDataUri: null });
+    await runSnapshotRequest(
+      provider,
+      (signal) => provider.startQrLogin(signal),
+      true,
+      (snapshot) => releaseUncommittedOwnership(provider, snapshot),
+    );
+  },
   reopenLogin: async (provider) => {
     activateAccountScope(provider);
     const { snapshot, busy } = get();
@@ -1350,33 +1371,23 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
       commitSnapshot(scope, scopedSnapshot(provider, next));
     } catch (error) {
       if (generation !== requestGenerationFor(scope)) return;
-      clearOwnershipTimersForScope(scope);
-      blockedAttempts.add(attemptKey(provider, owner.attemptId));
-      setAccountScopeState(scope, { displayedQrImageDataUri: null, busy: false });
       try {
         const reconciled = await provider.getAccountSnapshot(runtimeSignal(provider));
         if (generation !== requestGenerationFor(scope)) return;
-        const reconciledOwner = ownedSnapshot(reconciled);
+        const next = scopedSnapshot(provider, reconciled);
+        const reconciledOwner = ownedSnapshot(next);
         if (
           !reconciledOwner ||
           reconciledOwner.attemptId !== owner.attemptId ||
           reconciledOwner.ownerLeaseId !== owner.ownerLeaseId
         ) {
-          commitSnapshot(scope, scopedSnapshot(provider, reconciled));
+          commitSnapshot(scope, next);
           return;
         }
       } catch {
         if (generation !== requestGenerationFor(scope)) return;
       }
-      setAccountScopeState(scope, { error: classifyError(error) });
-      try {
-        const next = await cancellationRequest(provider, owner.attemptId, runtimeSignal(provider));
-        if (generation === requestGenerationFor(scope)) {
-          commitSnapshot(scope, scopedSnapshot(provider, next));
-        }
-      } catch {
-        // The stable local error above is sufficient; cancellation is best effort.
-      }
+      setAccountScopeState(scope, { busy: false, error: classifyError(error) });
     }
   },
   refreshQr: async (provider) => {

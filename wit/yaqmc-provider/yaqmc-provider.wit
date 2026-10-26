@@ -5,6 +5,7 @@ package yaqmc:provider@0.1.0;
 interface utilities {
   log: func(level: string, message: string);
   monotonic-millis: func() -> u64;
+  unix-millis: func() -> u64;
   random-bytes: func(length: u32) -> result<list<u8>, string>;
 }
 
@@ -29,6 +30,10 @@ interface network {
 interface credentials {
   create: func(origin: string, secret: string) -> result<string, string>;
   delete: func(handle: string) -> result<bool, string>;
+}
+
+interface settings {
+  get: func() -> result<string, string>;
 }
 
 /// Frozen provider guest contract for Plugin API v3.
@@ -80,6 +85,7 @@ world provider-account {
   import storage;
   import network;
   import credentials;
+  import settings;
   export invoke: func(
     capability: string,
     operation: string,

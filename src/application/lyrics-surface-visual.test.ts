@@ -75,4 +75,11 @@ describe('lyrics surface visual clock', () => {
       expect(source, relative).not.toContain('surfaceVisualActive');
     }
   });
+
+  it('animates long sustained words when bounded by their source duration', () => {
+    const node = document.createElement('span');
+    drivePercentageClock(node, '--word-progress', 0.25, 4500, 6000);
+    expect(node.style.transition).toBe('--word-progress 4500ms linear');
+    expect(node.style.getPropertyValue('--word-progress')).toBe('100%');
+  });
 });

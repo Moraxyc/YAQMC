@@ -120,4 +120,49 @@ describe('NativeApplication startup', () => {
       ]).map((profile) => profile.profileId),
     ).toEqual(['default']);
   });
+
+  it('refreshes aggregate options in both directions after a committed plugin change', async () => {
+    const qqMusic = {
+      providerId: 'qqmusic',
+      displayName: 'QQ Music',
+      isDefault: true,
+      available: true,
+      capabilities: {
+        catalog: true,
+        playback: true,
+        recommendations: true,
+        lyrics: true,
+        share: true,
+        account: true,
+      },
+    };
+    const aggregate = {
+      ...qqMusic,
+      providerId: 'plugin.aggregate',
+      displayName: 'All platforms',
+      isDefault: false,
+      capabilities: { ...qqMusic.capabilities, account: false },
+    };
+    let descriptors = [qqMusic];
+    runtimeMocks.invoke.mockImplementation((method: string) =>
+      Promise.resolve(method === 'provider_list' ? [...descriptors] : []),
+    );
+    render(<NativeApplication />);
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-options')).toHaveTextContent('qqmusic'),
+    );
+
+    descriptors = [qqMusic, aggregate];
+    act(() => runtimeMocks.emit('plugin://changed', { pluginId: 'plugin', enabled: true }));
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-options')).toHaveTextContent('plugin.aggregate'),
+    );
+
+    descriptors = [qqMusic];
+    act(() => runtimeMocks.emit('plugin://changed', { pluginId: 'plugin', enabled: true }));
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-options')).not.toHaveTextContent('plugin.aggregate'),
+    );
+    expect(runtimeMocks.invoke).toHaveBeenCalledTimes(6);
+  });
 });

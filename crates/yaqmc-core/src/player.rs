@@ -2568,17 +2568,47 @@ fn source_failure(error: &PlaybackSourceError) -> PlaybackFailure {
         ),
         PlaybackSourceError::EntitlementInsufficient => (
             "entitlement-insufficient",
-            "The active QQ Music account is not entitled to this track or quality.",
+            "The active platform account is not entitled to this track or quality.",
+            false,
+        ),
+        PlaybackSourceError::MembershipRequired => (
+            "membership-required",
+            "The platform did not grant this account access to the membership track.",
+            false,
+        ),
+        PlaybackSourceError::PurchaseRequired => (
+            "purchase-required",
+            "This track requires a separate purchase by the current account.",
+            false,
+        ),
+        PlaybackSourceError::CopyrightRestricted => (
+            "copyright-restricted",
+            "The platform does not permit playback of this track under its licensing restrictions.",
+            false,
+        ),
+        PlaybackSourceError::ProviderUnsupported => (
+            "provider-playback-unsupported",
+            "The music plugin does not support this playback operation.",
+            false,
+        ),
+        PlaybackSourceError::ProviderUnavailable => (
+            "provider-unavailable",
+            "The music plugin is unavailable; check its configuration and permissions.",
+            false,
+        ),
+        PlaybackSourceError::ProviderFailure => (
+            "provider-playback-failed",
+            "The music plugin could not resolve a valid playback source.",
             false,
         ),
         PlaybackSourceError::EntitlementUnknown => (
             "entitlement-unknown",
-            "The QQ Music account entitlement could not be confirmed.",
+            "The platform account entitlement could not be confirmed.",
             true,
         ),
         PlaybackSourceError::AuthenticationExpired => (
             "authentication-expired",
-            "The QQ Music session expired and must be authorized again.",
+            "The platform session expired and must be authorized again.",
             false,
         ),
         PlaybackSourceError::TrackUnavailable => (
@@ -2593,7 +2623,7 @@ fn source_failure(error: &PlaybackSourceError) -> PlaybackFailure {
         ),
         PlaybackSourceError::DecryptionFailed => (
             "media-decryption-failed",
-            "The encrypted QQ Music source could not be decrypted.",
+            "The encrypted media source could not be decrypted.",
             true,
         ),
         PlaybackSourceError::Cancelled => (
@@ -2877,6 +2907,7 @@ mod tests {
 
     fn lyric_document() -> LyricDocument {
         LyricDocument {
+            comments: Vec::new(),
             song_id: "one".to_owned(),
             sync_mode: LyricSyncMode::Word,
             metadata: LyricMetadata {
@@ -3788,6 +3819,59 @@ mod tests {
             Err(PlayerError::NoPlayableTracks)
         ));
         assert_eq!(resolver_calls.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn restricted_tracks_publish_specific_failures_after_account_scoped_resolution() {
+        struct RestrictedResolver(PlaybackSourceError);
+        #[async_trait]
+        impl PlaybackSourceResolver for RestrictedResolver {
+            async fn resolve(
+                &self,
+                _song: &Song,
+            ) -> Result<crate::media::ResolvedPlaybackSource, PlaybackSourceError> {
+                Err(self.0.clone())
+            }
+        }
+        for (error, expected) in [
+            (
+                PlaybackSourceError::MembershipRequired,
+                "membership-required",
+            ),
+            (
+                PlaybackSourceError::CopyrightRestricted,
+                "copyright-restricted",
+            ),
+            (
+                PlaybackSourceError::ProviderUnsupported,
+                "provider-playback-unsupported",
+            ),
+            (
+                PlaybackSourceError::ProviderFailure,
+                "provider-playback-failed",
+            ),
+            (PlaybackSourceError::UrlUnavailable, "media-url-unavailable"),
+        ] {
+            let player = PlayerService::with_runtime(
+                Arc::new(crate::audio::TestAudioEngine::default()),
+                Arc::new(RestrictedResolver(error)),
+                Arc::new(crate::media::PassthroughMediaPreparer),
+            );
+            let mut track = song("membership-track", 10_000);
+            track.availability = SongAvailability::EntitlementRequired {
+                required_tier: "music-vip".to_owned(),
+            };
+            assert!(player
+                .play_tracks(PlayTracksRequest {
+                    tracks: vec![track],
+                    start_at_id: None,
+                    shuffle: None
+                })
+                .await
+                .is_err());
+            let snapshot = player.snapshot().await;
+            assert_eq!(snapshot.playback_error.unwrap().code, expected);
+        }
     }
 
     #[tokio::test]
@@ -5899,6 +5983,67 @@ mod tests {
         assert_eq!(projection.word_index, Some(1));
         assert!(projection.current_line.is_some());
         assert!(projection.next_line.is_some());
+    }
+
+    #[test]
+    fn source_failures_do_not_misidentify_external_platforms_as_qqmusic() {
+        for (error, code, retryable) in [
+            (
+                PlaybackSourceError::MembershipRequired,
+                "membership-required",
+                false,
+            ),
+            (
+                PlaybackSourceError::PurchaseRequired,
+                "purchase-required",
+                false,
+            ),
+            (
+                PlaybackSourceError::CopyrightRestricted,
+                "copyright-restricted",
+                false,
+            ),
+            (
+                PlaybackSourceError::ProviderUnsupported,
+                "provider-playback-unsupported",
+                false,
+            ),
+            (
+                PlaybackSourceError::ProviderUnavailable,
+                "provider-unavailable",
+                false,
+            ),
+            (
+                PlaybackSourceError::ProviderFailure,
+                "provider-playback-failed",
+                false,
+            ),
+            (
+                PlaybackSourceError::EntitlementInsufficient,
+                "entitlement-insufficient",
+                false,
+            ),
+            (
+                PlaybackSourceError::EntitlementUnknown,
+                "entitlement-unknown",
+                true,
+            ),
+            (
+                PlaybackSourceError::AuthenticationExpired,
+                "authentication-expired",
+                false,
+            ),
+            (
+                PlaybackSourceError::DecryptionFailed,
+                "media-decryption-failed",
+                true,
+            ),
+        ] {
+            let failure = source_failure(&error);
+            assert_eq!(failure.code, code);
+            assert_eq!(failure.retryable, retryable);
+            assert!(!failure.message.contains("QQ Music"));
+        }
     }
 
     #[test]

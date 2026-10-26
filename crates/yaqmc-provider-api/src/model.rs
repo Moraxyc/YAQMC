@@ -180,12 +180,38 @@ pub enum LyricSyncMode {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricDocument {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<SongComment>,
     pub song_id: String,
     pub sync_mode: LyricSyncMode,
     pub metadata: LyricMetadata,
     #[serde(default)]
     pub vocalists: Vec<LyricVocalist>,
     pub lines: Vec<LyricLine>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SongComment {
+    pub id: String,
+    pub content: String,
+    pub author: String,
+    pub liked_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<CommentReplyTarget>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentReplyTarget {
+    pub author: String,
+    pub content: String,
 }
 
 #[cfg(test)]

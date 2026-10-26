@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import i18n from '../i18n';
 import {
   choosePluginFile,
+  inspectPluginPath,
+  installPlugin,
   listPlugins,
   pluginHostSafeMode,
   pluginHostDeveloperMode,
@@ -155,6 +157,71 @@ describe('PluginManager', () => {
     platforms: ['win32'],
     unpackedPath: '/test/provider',
   };
+
+  it('bulk-selects sensitive permissions on installation and clears them without removing ordinary grants', async () => {
+    vi.mocked(choosePluginFile).mockResolvedValue('/test/provider.yaqmc-plugin');
+    vi.mocked(inspectPluginPath).mockResolvedValue({
+      sha256: 'a'.repeat(64),
+      compressedBytes: 10,
+      expandedBytes: 20,
+      fileCount: 2,
+      files: [],
+      manifest: { id: providerPlugin.id, name: providerPlugin.name, version: '1.0.0' },
+      permissions: providerPlugin.permissions,
+      scriptScan: { severity: null, findings: [] },
+      styleScan: { severity: null, findings: [] },
+    });
+    render(<PluginManager />);
+    fireEvent.click(await screen.findByRole('button', { name: /choose file/i }));
+    const dialog = await screen.findByRole('dialog', { name: 'Review plugin permissions' });
+    const ordinary = within(dialog).getByRole('checkbox', { name: /catalog/i });
+    expect(ordinary).toBeChecked();
+    expect(ordinary).toBeDisabled();
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Select all sensitive permissions' }),
+    );
+    expect(
+      within(dialog)
+        .getAllByRole('checkbox')
+        .every((box) => (box as HTMLInputElement).checked),
+    ).toBe(true);
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Clear all sensitive permissions' }),
+    );
+    expect(ordinary).toBeChecked();
+    expect(
+      within(dialog)
+        .getAllByRole('checkbox')
+        .filter((box) => !(box as HTMLInputElement).disabled)
+        .every((box) => !(box as HTMLInputElement).checked),
+    ).toBe(true);
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Select all sensitive permissions' }),
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: /install|accept/i }));
+    await waitFor(() =>
+      expect(installPlugin).toHaveBeenCalledWith('/test/provider.yaqmc-plugin', {
+        enable: true,
+        grant: providerPlugin.permissions,
+      }),
+    );
+  });
+
+  it('allows bulk approval during re-enable review without enabling until confirmed', async () => {
+    vi.mocked(listPlugins).mockResolvedValue([providerPlugin]);
+    render(<PluginManager />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable' }));
+    const review = screen.getByRole('region', { name: 'Review plugin permissions' });
+    fireEvent.click(
+      within(review).getByRole('button', { name: 'Select all sensitive permissions' }),
+    );
+    expect(setPluginEnabled).not.toHaveBeenCalled();
+    expect(within(review).getByRole('button', { name: 'Enable' })).toBeEnabled();
+    fireEvent.click(
+      within(review).getByRole('button', { name: 'Clear all sensitive permissions' }),
+    );
+    expect(within(review).getByRole('button', { name: 'Enable' })).toBeDisabled();
+  });
 
   it('never grants previously denied sensitive permissions when enabling a plugin', async () => {
     vi.mocked(listPlugins).mockResolvedValue([providerPlugin]);

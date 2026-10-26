@@ -77,6 +77,20 @@ or hidden for fullscreen.
 
 ## Desktop Lyrics presentation
 
+Desktop Lyrics and Lyrics Island share the **Word jump** preference with the main lyrics view.
+Word timing drives continuous fill and a synchronized lift animation; pausing freezes the current
+progress, seeking resynchronizes it, and hidden surfaces stop their visual clocks. Reduced motion
+disables the lift and line entrance animations. Lyrics without word timestamps retain line-based
+presentation rather than synthesizing word timing.
+
+Each surface has an independent **Translation and romanization font size** control, separate from
+the primary lyric size (8–48 px on Desktop Lyrics, 8–24 px on Lyrics Island). Existing preferences
+without this field migrate from the previous 52% secondary-size ratio.
+
+**Settings → Lyrics → Chinese lyric script** selects original text or Traditional Chinese (Taiwan).
+OpenCC converts lyric text and translations locally across all lyrics views, including the shared
+Android render model. Source documents, timing, romanization, and the interface language are preserved.
+
 The default presentation background is transparent. In unlocked idle state only the lyric text and its dedicated
 text shadow are visible. Pointer entry reveals a low-alpha editing backdrop, subtle container outline, drag
 affordance, lock action, playback controls, Settings, and close. Pointer leave hides that chrome after a short

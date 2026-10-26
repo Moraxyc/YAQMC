@@ -18,6 +18,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::plugin::{
     component_host::ComponentHostContext,
+    kugou_signing::apply_credential_query_signing,
     manifest::{ProviderCapability, ProviderWorld},
     network::{component_request_origin, proxy_component_request, ComponentCredentialHeader},
 };
@@ -309,7 +310,17 @@ fn invoke_sync(
         .map_err(|_| ComponentRuntimeError::SandboxFault)?;
     let result = invoke
         .call(&mut store, (capability, operation, payload_json))
-        .map_err(|_| ComponentRuntimeError::SandboxFault)?
+        .map_err(|failure| {
+            tracing::warn!(
+                target: "plugin.component",
+                capability,
+                operation,
+                trap = ?failure.downcast_ref::<wasmtime::Trap>(),
+                fuel_remaining = store.get_fuel().ok(),
+                "provider component invocation trapped"
+            );
+            ComponentRuntimeError::SandboxFault
+        })?
         .0;
     invoke
         .post_return(&mut store)
@@ -341,8 +352,22 @@ fn add_component_host_imports(
         add_network_imports(linker, host.clone(), world.has_credentials())?;
     }
     if world.has_credentials() {
-        add_credential_imports(linker, host)?;
+        add_credential_imports(linker, host.clone())?;
+        add_settings_imports(linker, host)?;
     }
+    Ok(())
+}
+
+fn add_settings_imports(
+    linker: &mut Linker<ComponentStore>,
+    host: ComponentHostContext,
+) -> Result<(), ComponentRuntimeError> {
+    let mut instance = linker
+        .instance("yaqmc:provider/settings@0.1.0")
+        .map_err(|_| ComponentRuntimeError::SandboxFault)?;
+    instance
+        .func_wrap("get", move |_store, (): ()| Ok((host.settings_get(),)))
+        .map_err(|_| ComponentRuntimeError::SandboxFault)?;
     Ok(())
 }
 
@@ -364,6 +389,12 @@ fn add_utilities_imports(
     instance
         .func_wrap("monotonic-millis", move |_store, (): ()| {
             Ok((clock.monotonic_millis(),))
+        })
+        .map_err(|_| ComponentRuntimeError::SandboxFault)?;
+    let wall_clock = host.clone();
+    instance
+        .func_wrap("unix-millis", move |_store, (): ()| {
+            Ok((wall_clock.unix_millis(),))
         })
         .map_err(|_| ComponentRuntimeError::SandboxFault)?;
     instance
@@ -473,9 +504,38 @@ fn component_network_request(
     if request_json.len() > COMPONENT_MAX_RESPONSE_BYTES {
         return Err("component network request is too large".to_owned());
     }
-    let payload: serde_json::Value = serde_json::from_str(request_json)
+    let mut payload: serde_json::Value = serde_json::from_str(request_json)
         .map_err(|_| "component network request is invalid".to_owned())?;
     let credential_headers = component_credential_headers(host, allow_credentials, &payload)?;
+    apply_credential_query_signing(host, allow_credentials, &mut payload)?;
+    let credential_body_fields =
+        component_credential_body_fields(host, allow_credentials, &payload)?;
+    if !credential_body_fields.is_empty() {
+        let body = payload
+            .get("body")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "credential body fields require a form body".to_owned())?;
+        let content_type = payload
+            .get("headers")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|headers| headers.get("content-type"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !content_type.starts_with("application/x-www-form-urlencoded") {
+            return Err("credential body fields require form encoding".to_owned());
+        }
+        let mut encoded = body.to_owned();
+        for (name, value) in credential_body_fields {
+            if !encoded.is_empty() {
+                encoded.push('&');
+            }
+            encoded.push_str(&form_encode(&name));
+            encoded.push('=');
+            encoded.push_str(&form_encode(&value));
+        }
+        payload["body"] = serde_json::Value::String(encoded);
+    }
     let result = host.runtime().block_on(async {
         tokio::select! {
             result = proxy_component_request(host.allowed_origins(), &payload, &credential_headers) => result,
@@ -485,6 +545,64 @@ fn component_network_request(
     host.ensure_active()?;
     serde_json::to_string(&result)
         .map_err(|_| "component network response could not be encoded".to_owned())
+}
+
+fn component_credential_body_fields(
+    host: &ComponentHostContext,
+    allow_credentials: bool,
+    payload: &serde_json::Value,
+) -> Result<Vec<(String, String)>, String> {
+    let Some(bindings) = payload.get("credentialBodyFields") else {
+        return Ok(Vec::new());
+    };
+    let bindings = bindings
+        .as_array()
+        .ok_or_else(|| "component credential body fields must be an array".to_owned())?;
+    if bindings.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !allow_credentials {
+        return Err("component credentials were not granted".to_owned());
+    }
+    if bindings.len() > 2 {
+        return Err("component credential body field limit exceeded".to_owned());
+    }
+    let origin = component_request_origin(payload)?;
+    let mut names = HashSet::new();
+    let mut fields = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let name = binding
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "component credential body field name is required".to_owned())?
+            .to_ascii_lowercase();
+        if name != "refresh_token" || !names.insert(name.clone()) {
+            return Err("component credential body field is not allowed".to_owned());
+        }
+        let handle = binding
+            .get("handle")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "component credential handle is required".to_owned())?;
+        let value = host.credential_resolve(handle, &origin)?;
+        if value.is_empty() || value.len() > 8_192 || value.chars().any(char::is_control) {
+            return Err("component credential body value is invalid".to_owned());
+        }
+        fields.push((name, value));
+    }
+    Ok(fields)
+}
+
+fn form_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(&mut encoded, "%{byte:02X}");
+        }
+    }
+    encoded
 }
 
 pub(crate) fn component_credential_headers(

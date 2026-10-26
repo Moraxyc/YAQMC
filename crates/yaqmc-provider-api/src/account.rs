@@ -105,8 +105,8 @@ pub struct RemotePlayHistoryItem {
 #[serde(rename_all = "kebab-case")]
 pub enum EntitlementTier {
     Free,
-    #[serde(alias = "music-vip")]
     GreenDiamond,
+    MusicVip,
     SuperVip,
     Unknown,
 }

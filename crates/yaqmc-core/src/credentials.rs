@@ -21,6 +21,15 @@ impl FileCredentialStore {
     }
 
     fn path_for(&self, account: &str) -> std::path::PathBuf {
+        // Component account names contain a namespace and opaque handle. Their
+        // hex encoding can exceed the filesystem's 255-byte filename limit.
+        if account.len() > 120 {
+            use sha2::{Digest, Sha256};
+            return self.dir.join(format!(
+                "acct-sha256-{:x}",
+                Sha256::digest(account.as_bytes())
+            ));
+        }
         let mut name = String::from("acct-");
         for byte in account.as_bytes() {
             name.push_str(&format!("{byte:02x}"));
@@ -202,6 +211,28 @@ mod tests {
         assert_eq!(entries.len(), 1);
         store.delete("qqmusic-session").expect("delete");
         assert_eq!(store.load("qqmusic-session").expect("load"), None);
+    }
+
+    #[test]
+    fn file_store_round_trips_component_accounts_across_reopen() {
+        let dir = tempfile::tempdir().expect("credential dir");
+        let account = format!(
+            "plugin-component:{}:cred_{}",
+            "a".repeat(64),
+            "b".repeat(48)
+        );
+        let store = FileCredentialStore::open(dir.path()).expect("open");
+        assert!(store.path_for(&account).file_name().unwrap().len() < 255);
+        store
+            .save(&account, "synthetic")
+            .expect("save component credential");
+        let reopened = FileCredentialStore::open(dir.path()).expect("reopen");
+        assert_eq!(
+            reopened.load(&account).expect("load"),
+            Some("synthetic".to_owned())
+        );
+        reopened.delete(&account).expect("delete");
+        assert_eq!(reopened.load(&account).expect("load after delete"), None);
     }
 
     #[test]

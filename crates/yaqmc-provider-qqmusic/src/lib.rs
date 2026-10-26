@@ -110,6 +110,8 @@ mod tests {
         assert!(capabilities.playback().is_some());
         assert!(capabilities.recommendations().is_some());
         assert!(capabilities.lyrics().is_some());
+        assert!(capabilities.comments().is_some());
+        assert!(capabilities.descriptor(true, true).capabilities.comments);
         let legacy = capabilities.legacy_provider().expect("legacy provider");
         // Capability accounts are exposed through the scoped legacy adapter;
         // verify that the adapter still delegates the account generation to
@@ -249,7 +251,7 @@ mod tests {
 
         assert!(matches!(
             registry.resolve(&song).await,
-            Err(PlaybackSourceError::TrackUnavailable)
+            Err(PlaybackSourceError::ProviderUnavailable)
         ));
     }
 

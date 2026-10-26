@@ -255,6 +255,8 @@ pub struct ProviderOAuthCompleteParams {
     pub profile_id: Option<String>,
     pub attempt_id: String,
     pub callback_url: String,
+    #[serde(default)]
+    pub browser_session_cookies: Option<Vec<yaqmc_provider_api::BrowserSessionCookie>>,
 }
 
 #[derive(Deserialize)]

@@ -1,6 +1,7 @@
 import type { CoreError } from '@yaqmc/client';
 import { CoreInvokeError } from './core/client';
 import { ProtocolError } from './core/frames';
+import { BrowserLoginError } from './windows/oauth-window';
 
 export const INVOKE_CHANNEL = 'yaqmc:invoke';
 export const EVENT_CHANNEL = 'yaqmc:event';
@@ -48,6 +49,14 @@ export async function handleRendererInvoke(
 }
 
 export function toCoreError(error: unknown): CoreError {
+  if (error instanceof BrowserLoginError) {
+    return {
+      code: 'core.command_error',
+      message: error.message,
+      retryable: false,
+      details: { code: error.code, message: error.message, retryable: false },
+    };
+  }
   if (error instanceof CoreInvokeError) {
     return {
       code: error.code,

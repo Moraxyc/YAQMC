@@ -27,6 +27,7 @@ Component 也只能调用所选 WIT world 实际存在的 import。
 | `provider.playback`       | 解析、客户端降级、音质选择             | 只接受不透明受管缓存或精确 origin HTTPS 配方，由 Core 流式消费。 |
 | `provider.recommendation` | 下一批续播                             | 按 provider/账号代次隔离并丢弃过期响应。                         |
 | `provider.lyrics`         | 归一化歌词文档                         | 校验有界逐行/逐字时间，失败时独立降级。                          |
+| `provider.comments`       | 只读歌曲评论及回复                     | 宿主统一渲染评论面板和歌词弹幕，校验有界分页。                   |
 | `provider.account`        | 登录、快照、账号库、收藏和歌单变更     | 把状态、取消、存储和凭据句柄绑定到单个 provider 实例。           |
 
 JSON fixture 是完整操作名列表。实现可以对可选账号变更返回清洗后的 `unsupported-operation`，但不能虚构未声明能力，
@@ -39,6 +40,7 @@ JSON fixture 是完整操作名列表。实现可以对可选账号变更返回�
 - `provider.playback`：`playback.resolve`、`playback.resolve-client-fallback`、
   `playback.set-preferred-quality`、`playback.set-current-quality`；
 - `provider.recommendation`：`recommendation.next`；`provider.lyrics`：`lyrics.get`；
+- `provider.comments`：`comments.list`。请求、返回、分页、旧版兼容和生命周期见[歌曲评论](song-comments.md)。
 - `provider.account`：`account.snapshot`、`account.restore-session`、`account.sign-out`、账号库/歌单读写，以及
   `account.auth.*` QR/OAuth 生命周期。每个精确账号操作名以 fixture 为准。
 

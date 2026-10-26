@@ -71,12 +71,28 @@ export type ProviderOAuthWindowDeps = {
     providerId: string;
     attemptId: string;
     callbackUrl: string;
+    browserSessionCookies?: Array<{ name: string; value: string }>;
   }) => Promise<unknown>;
   provider_auth_oauth_cancel: (params: {
     providerId: string;
     attemptId: string;
   }) => Promise<unknown>;
 };
+
+export type OAuthWindowSession = {
+  attemptId: string;
+  completion: Promise<unknown>;
+};
+
+export class BrowserLoginError extends Error {
+  constructor(
+    readonly code: 'mobile-login-required' | 'authorization-rejected',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'BrowserLoginError';
+  }
+}
 
 export function oauthWindowLabel(attemptId: string): string {
   return `${OAUTH_WINDOW_PREFIX}${attemptId}`;
@@ -111,8 +127,8 @@ export function urlMatchesOAuthAllowlist(url: string, allowlist: readonly string
 }
 
 export function isOAuthCallbackUrl(url: string, urlPrefix: string): boolean {
-  const candidate = parseUrl(url);
-  const expected = parseUrl(urlPrefix);
+  const candidate = parseOAuthCallbackUrl(url);
+  const expected = parseOAuthCallbackUrl(urlPrefix);
   if (!candidate || !expected) {
     return false;
   }
@@ -171,7 +187,7 @@ export function oauthWindowCreateOptions(input: {
 export async function openOAuthWindow(
   providerKind: AccountLoginMethod,
   deps: OAuthWindowDeps,
-): Promise<{ attemptId: string }> {
+): Promise<OAuthWindowSession> {
   const prepared = await deps.auth_oauth_prepare({ providerKind });
   const attemptId = prepared.attemptId;
   let window: OAuthWindowLike | undefined;
@@ -184,20 +200,24 @@ export async function openOAuthWindow(
         isPackaged: deps.isPackaged,
       }),
     );
-    attachOAuthWindowGuards(window, prepared, deps);
-    void window.loadURL(prepared.url);
+    const guards = attachOAuthWindowGuards(window, prepared, deps);
+    try {
+      void Promise.resolve(window.loadURL(prepared.url)).catch(guards.fail);
+    } catch (error) {
+      guards.fail(error);
+    }
+    return { attemptId, completion: guards.completion };
   } catch (error) {
     void deps.auth_oauth_cancel({ attemptId });
     window?.close();
     throw error;
   }
-  return { attemptId };
 }
 
 export async function openProviderOAuthWindow(
   input: { providerId: string; methodId: string },
   deps: ProviderOAuthWindowDeps,
-): Promise<{ attemptId: string }> {
+): Promise<OAuthWindowSession> {
   const prepared = await deps.provider_auth_oauth_prepare(input);
   const attemptId = prepared.attemptId;
   let window: OAuthWindowLike | undefined;
@@ -212,54 +232,83 @@ export async function openProviderOAuthWindow(
         isPackaged: deps.isPackaged,
       }),
     );
-    attachProviderOAuthWindowGuards(window, input.providerId, prepared, deps);
-    void window.loadURL(prepared.url);
+    const guards = prepared.browserSession
+      ? attachBrowserSessionGuards(window, session, input.providerId, prepared, deps)
+      : attachProviderOAuthWindowGuards(window, input.providerId, prepared, deps);
+    try {
+      void Promise.resolve(window.loadURL(prepared.url)).catch(guards.fail);
+    } catch (error) {
+      guards.fail(error);
+    }
+    return { attemptId, completion: guards.completion };
   } catch (error) {
     void deps.provider_auth_oauth_cancel({ providerId: input.providerId, attemptId });
     window?.close();
     throw error;
   }
-  return { attemptId };
 }
 
 function attachOAuthWindowGuards(
   window: OAuthWindowLike,
   prepared: OAuthPrepareResult,
   deps: Pick<OAuthWindowDeps, 'auth_oauth_complete' | 'auth_oauth_cancel'>,
-): void {
+): OAuthWindowGuards {
   let phase: 'open' | 'completing' | 'finished' = 'open';
   const attemptId = prepared.attemptId;
   const allowlist = prepared.navigationAllowlist;
   const callbackPrefix = prepared.callbackMatcher.urlPrefix;
 
-  const onNavigate = (event: OAuthNavigationEvent, url: string): void => {
-    if (isOAuthCallbackUrl(url, callbackPrefix)) {
-      event.preventDefault();
+  let fail: (error: unknown) => void = () => undefined;
+  const completion = new Promise<unknown>((resolve, reject) => {
+    fail = (error: unknown): void => {
+      if (phase !== 'open') return;
+      phase = 'finished';
+      reject(error);
+      void Promise.resolve()
+        .then(() => deps.auth_oauth_cancel({ attemptId }))
+        .catch(() => undefined);
+      window.close();
+    };
+    const onNavigate = (event: OAuthNavigationEvent, url: string): void => {
+      if (isOAuthCallbackUrl(url, callbackPrefix)) {
+        event.preventDefault();
+        if (phase !== 'open') {
+          return;
+        }
+        phase = 'completing';
+        void deps.auth_oauth_complete({ attemptId, callbackUrl: url }).then(
+          (snapshot) => {
+            phase = 'finished';
+            resolve(snapshot);
+            window.close();
+          },
+          (error: unknown) => {
+            phase = 'finished';
+            reject(error);
+            window.close();
+          },
+        );
+        return;
+      }
+      if (!urlMatchesOAuthAllowlist(url, allowlist)) {
+        event.preventDefault();
+      }
+    };
+
+    window.webContents.on('will-navigate', onNavigate);
+    window.webContents.on('will-redirect', onNavigate);
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    window.on('closed', () => {
       if (phase !== 'open') {
         return;
       }
-      phase = 'completing';
-      void deps.auth_oauth_complete({ attemptId, callbackUrl: url }).finally(() => {
-        phase = 'finished';
-        window.close();
-      });
-      return;
-    }
-    if (!urlMatchesOAuthAllowlist(url, allowlist)) {
-      event.preventDefault();
-    }
-  };
-
-  window.webContents.on('will-navigate', onNavigate);
-  window.webContents.on('will-redirect', onNavigate);
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.on('closed', () => {
-    if (phase !== 'open') {
-      return;
-    }
-    phase = 'finished';
-    void deps.auth_oauth_cancel({ attemptId });
+      phase = 'finished';
+      void Promise.resolve()
+        .then(() => deps.auth_oauth_cancel({ attemptId }))
+        .then(resolve, reject);
+    });
   });
+  return { completion, fail };
 }
 
 function attachProviderOAuthWindowGuards(
@@ -270,36 +319,264 @@ function attachProviderOAuthWindowGuards(
     ProviderOAuthWindowDeps,
     'provider_auth_oauth_complete' | 'provider_auth_oauth_cancel'
   >,
-): void {
+): OAuthWindowGuards {
   let phase: 'open' | 'completing' | 'finished' = 'open';
   const attemptId = prepared.attemptId;
   const allowlist = prepared.navigationAllowlist;
   const callbackPrefix = prepared.callbackMatcher.urlPrefix;
-  const onNavigate = (event: OAuthNavigationEvent, url: string): void => {
-    if (isOAuthCallbackUrl(url, callbackPrefix)) {
-      event.preventDefault();
+  let fail: (error: unknown) => void = () => undefined;
+  const completion = new Promise<unknown>((resolve, reject) => {
+    fail = (error: unknown): void => {
       if (phase !== 'open') return;
-      phase = 'completing';
-      void deps
-        .provider_auth_oauth_complete({ providerId, attemptId, callbackUrl: url })
-        .finally(() => {
-          phase = 'finished';
-          window.close();
-        });
-      return;
-    }
-    if (!urlMatchesOAuthAllowlist(url, allowlist)) event.preventDefault();
-  };
+      phase = 'finished';
+      reject(error);
+      void Promise.resolve()
+        .then(() => deps.provider_auth_oauth_cancel({ providerId, attemptId }))
+        .catch(() => undefined);
+      window.close();
+    };
+    const onNavigate = (event: OAuthNavigationEvent, url: string): void => {
+      if (isOAuthCallbackUrl(url, callbackPrefix)) {
+        event.preventDefault();
+        if (phase !== 'open') return;
+        phase = 'completing';
+        void deps.provider_auth_oauth_complete({ providerId, attemptId, callbackUrl: url }).then(
+          (snapshot) => {
+            phase = 'finished';
+            resolve(snapshot);
+            window.close();
+          },
+          (error: unknown) => {
+            phase = 'finished';
+            reject(error);
+            window.close();
+          },
+        );
+        return;
+      }
+      if (!urlMatchesOAuthAllowlist(url, allowlist)) event.preventDefault();
+    };
 
-  window.webContents.on('will-navigate', onNavigate);
-  window.webContents.on('will-redirect', onNavigate);
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.on('closed', () => {
+    window.webContents.on('will-navigate', onNavigate);
+    window.webContents.on('will-redirect', onNavigate);
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    window.on('closed', () => {
+      if (phase !== 'open') return;
+      phase = 'finished';
+      void Promise.resolve()
+        .then(() => deps.provider_auth_oauth_cancel({ providerId, attemptId }))
+        .then(resolve, reject);
+    });
+  });
+  return { completion, fail };
+}
+
+type BrowserCookieSession = {
+  cookies: {
+    get(filter: { url: string }): Promise<Array<{ name: string; value: string }>>;
+    on(event: 'changed', listener: () => void): void;
+    removeListener(event: 'changed', listener: () => void): void;
+  };
+  clearStorageData(): Promise<void>;
+};
+
+function attachBrowserSessionGuards(
+  window: OAuthWindowLike,
+  session: unknown,
+  providerId: string,
+  prepared: OAuthPrepareResult,
+  deps: Pick<
+    ProviderOAuthWindowDeps,
+    'provider_auth_oauth_complete' | 'provider_auth_oauth_cancel'
+  >,
+): OAuthWindowGuards {
+  const policy = prepared.browserSession!;
+  const browser = session as BrowserCookieSession | undefined;
+  if (
+    !browser?.cookies?.get ||
+    !browser.cookies.on ||
+    !browser.cookies.removeListener ||
+    !browser.clearStorageData
+  ) {
+    throw new Error('Browser session login is unavailable');
+  }
+  const source = parseUrl(policy.url);
+  if (
+    !source ||
+    source.pathname !== '/' ||
+    source.search ||
+    source.hash ||
+    !urlMatchesOAuthAllowlist(prepared.url, prepared.navigationAllowlist) ||
+    policy.cookieNames.length === 0 ||
+    policy.cookieNames.length > 8 ||
+    policy.requiredCookieNames.length === 0 ||
+    policy.requiredCookieNames.some((name) => !policy.cookieNames.includes(name))
+  ) {
+    throw new Error('Browser session login policy is invalid');
+  }
+  let phase: 'open' | 'completing' | 'finished' = 'open';
+  let closed = false;
+  let inspecting = false;
+  let inspectAgain = false;
+  let navigationGeneration = 0;
+  let resolve!: (value: unknown) => void;
+  let reject!: (error: unknown) => void;
+  const completion = new Promise<unknown>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  const cleanup = (): void => {
+    browser.cookies.removeListener('changed', onChanged);
+    void browser.clearStorageData().catch(() => undefined);
+    if (!closed) window.close();
+  };
+  const fail = (error: unknown): void => {
     if (phase !== 'open') return;
     phase = 'finished';
-    void deps.provider_auth_oauth_cancel({ providerId, attemptId });
+    reject(error);
+    void deps
+      .provider_auth_oauth_cancel({ providerId, attemptId: prepared.attemptId })
+      .catch(() => undefined);
+    cleanup();
+  };
+  const navigationWasCancelled = (error: unknown): boolean => {
+    if (typeof error !== 'object' || error === null) return false;
+    const failure = error as { code?: string; errno?: number };
+    return (
+      failure.code === 'ERR_ABORTED' ||
+      failure.code === 'ERR_FAILED' ||
+      failure.errno === -3 ||
+      failure.errno === -2
+    );
+  };
+  const loadReplacement = (url: string): void => {
+    const generation = ++navigationGeneration;
+    void Promise.resolve()
+      .then(() => window.loadURL(url))
+      .catch((error) => {
+        if (generation !== navigationGeneration && navigationWasCancelled(error)) return;
+        fail(error);
+      });
+  };
+  const inspect = async (): Promise<void> => {
+    if (phase !== 'open') return;
+    if (inspecting) {
+      inspectAgain = true;
+      return;
+    }
+    inspecting = true;
+    try {
+      do {
+        inspectAgain = false;
+        const cookies = (await browser.cookies.get({ url: policy.url }))
+          .filter((cookie) => policy.cookieNames.includes(cookie.name))
+          .map(({ name, value }) => ({ name, value }));
+        if (phase !== 'open') return;
+        if (
+          policy.requiredCookieNames.every((name) =>
+            cookies.some((cookie) => cookie.name === name && cookie.value !== ''),
+          )
+        ) {
+          phase = 'completing';
+          try {
+            const snapshot = await deps.provider_auth_oauth_complete({
+              providerId,
+              attemptId: prepared.attemptId,
+              callbackUrl: policy.url,
+              browserSessionCookies: cookies,
+            });
+            phase = 'finished';
+            resolve(snapshot);
+          } catch (error) {
+            phase = 'finished';
+            reject(error);
+          }
+          cleanup();
+          return;
+        }
+      } while (inspectAgain);
+      if (closed && phase === 'open') {
+        phase = 'finished';
+        try {
+          resolve(
+            await deps.provider_auth_oauth_cancel({ providerId, attemptId: prepared.attemptId }),
+          );
+        } catch (error) {
+          reject(error);
+        }
+        cleanup();
+      }
+    } catch (error) {
+      fail(error);
+    } finally {
+      inspecting = false;
+    }
+  };
+  function onChanged(): void {
+    void inspect();
+  }
+  browser.cookies.on('changed', onChanged);
+  const navigate = (event: OAuthNavigationEvent, url: string): void => {
+    const secure = url.startsWith('http://') ? `https://${url.slice(7)}` : url;
+    const target = parseUrl(secure);
+    if (
+      policy.format === 'kugou-web' &&
+      target?.origin === 'https://cross.kugou.com' &&
+      target.pathname === '/callmsg/' &&
+      urlMatchesOAuthAllowlist(secure, prepared.navigationAllowlist)
+    ) {
+      const code = target.searchParams.get('errcode');
+      if (code && /^\d{1,10}$/.test(code) && code !== '0') {
+        event.preventDefault();
+        fail(
+          new BrowserLoginError(
+            code === '20002' ? 'mobile-login-required' : 'authorization-rejected',
+            code === '20002'
+              ? '酷狗要求使用酷狗 App 扫码登录（20002），请在账号登录中选择二维码。'
+              : `酷狗网页授权失败（${code}），请重试或使用酷狗 App 扫码登录。`,
+          ),
+        );
+        return;
+      }
+    }
+    // Some official login endpoints emit HTTP redirects, including KuGou's
+    // cross-domain cookie handoff. Load only their allowlisted HTTPS version.
+    if (url.startsWith('http://')) {
+      if (urlMatchesOAuthAllowlist(secure, prepared.navigationAllowlist)) {
+        event.preventDefault();
+        if (phase === 'open') loadReplacement(secure);
+        return;
+      }
+    }
+    if (!urlMatchesOAuthAllowlist(url, prepared.navigationAllowlist)) event.preventDefault();
+  };
+  window.webContents.on('will-navigate', navigate);
+  window.webContents.on('will-redirect', navigate);
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (phase === 'open' && urlMatchesOAuthAllowlist(url, prepared.navigationAllowlist)) {
+      loadReplacement(url);
+    }
+    return { action: 'deny' };
   });
+  window.on('closed', () => {
+    closed = true;
+    void inspect();
+  });
+  return {
+    completion,
+    fail(error) {
+      // Preventing an HTTP redirect intentionally rejects the original loadURL.
+      // The replacement has its own failure handler; keep that new page alive.
+      if (navigationGeneration > 0 && navigationWasCancelled(error)) return;
+      fail(error);
+    },
+  };
 }
+
+type OAuthWindowGuards = {
+  completion: Promise<unknown>;
+  fail(error: unknown): void;
+};
 
 function globMatchesUrl(glob: string, href: string, parsed: URL): boolean {
   if (glob.endsWith('/**')) {
@@ -329,6 +606,14 @@ function globMatchesUrl(glob: string, href: string, parsed: URL): boolean {
 }
 
 function parseUrl(value: string): URL | undefined {
+  return parseValidatedUrl(value, false);
+}
+
+function parseOAuthCallbackUrl(value: string): URL | undefined {
+  return parseValidatedUrl(value, true);
+}
+
+function parseValidatedUrl(value: string, allowLoopbackHttp: boolean): URL | undefined {
   if (
     value.length === 0 ||
     Buffer.byteLength(value, 'utf8') > OAUTH_URL_MAX_BYTES ||
@@ -341,12 +626,17 @@ function parseUrl(value: string): URL | undefined {
   }
   try {
     const parsed = new URL(value);
+    const secureHttps = parsed.protocol === 'https:' && parsed.port === '';
+    const loopbackHttp =
+      allowLoopbackHttp &&
+      parsed.protocol === 'http:' &&
+      parsed.hostname === '127.0.0.1' &&
+      parsed.port !== '';
     if (
-      parsed.protocol !== 'https:' ||
+      (!secureHttps && !loopbackHttp) ||
       parsed.hostname === '' ||
       parsed.username !== '' ||
-      parsed.password !== '' ||
-      parsed.port !== ''
+      parsed.password !== ''
     ) {
       return undefined;
     }

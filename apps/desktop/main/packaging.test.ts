@@ -48,6 +48,7 @@ describe('PACK-01 electron-builder', () => {
     expect(yaml).toContain('  - resources/icon.png');
     expect(yaml).toContain('  - resources/icon.icns');
     expect(yaml).not.toContain('harness/**');
+    expect(yaml).toContain("'!node_modules/@yaqmc/client{,/**}'");
     expect(yaml).toContain('electronVersion: 43.8.3');
     expect(yaml).toMatch(/protocols:[\s\S]*schemes:[\s\S]*- yaqmc/);
     expect(yaml).not.toContain('electronDist:');

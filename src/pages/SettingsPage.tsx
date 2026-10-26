@@ -35,7 +35,8 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import { useTranslation } from 'react-i18next';
 import { useLocalApiSettings } from '../application/local-api';
 import { useAccountStore } from '../application/account-runtime';
-import { useSafeArtworkSource } from '../application/artwork-source';
+import { useAccountAvatarUrl } from '../application/account-identity';
+import { AccountAvatar } from '../components/AccountAvatar';
 import {
   resetLyricsSurfacePosition,
   setLyricsSurfaceInteraction,
@@ -75,6 +76,7 @@ import {
 import { isNativeRuntime } from '../application/native-player-runtime';
 import { hostCapabilities, supportsLyricsSurfaces } from '../application/host-capabilities';
 import { useProviderSettings } from '../application/provider-settings';
+import { useStorageSettings } from '../application/storage-settings';
 import { isAndroidRuntime } from '../application/host-capabilities';
 import { usePlatformIntegration } from '../application/platform-integration';
 import { openProductLink } from '../application/external-links';
@@ -396,24 +398,6 @@ function ColorControl({
   );
 }
 
-function safeAccountAvatarUrl(value: string | null | undefined): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' &&
-      ['qpic.y.qq.com', 'q.qlogo.cn', 'thirdwx.qlogo.cn', 'thirdqq.qlogo.cn'].includes(
-        url.hostname,
-      ) &&
-      url.port === '' &&
-      url.username === '' &&
-      url.password === ''
-      ? value
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 function SurfacePreview({ kind }: { kind: SurfaceKind }) {
   const { t } = useTranslation('lyrics');
   return (
@@ -571,6 +555,20 @@ function SurfaceSettingsPanel({ kind, supported }: { kind: SurfaceKind; supporte
             }
           />
           <SettingRow
+            title={t('secondaryFontSize')}
+            description={t('secondaryFontSizeDescription')}
+            control={
+              <RangeControl
+                value={settings.secondaryFontSize}
+                min={8}
+                max={kind === 'desktop' ? 48 : 24}
+                label={t('secondaryFontSize')}
+                output={(value) => t('fontSizeValue', { value })}
+                onChange={(secondaryFontSize) => update({ secondaryFontSize })}
+              />
+            }
+          />
+          <SettingRow
             title={t('fontFamily')}
             description={t('systemFont')}
             control={
@@ -703,6 +701,7 @@ export function SettingsPage() {
   const host = hostCapabilities();
   const musicProvider = useMusicProvider();
   const provider = useProviderSettings(musicProvider.id, musicProvider.profileId);
+  const storage = useStorageSettings();
   const providerSelection = useMusicProviderSelection();
   const accountProvider = isAccountMusicProvider(musicProvider) ? musicProvider : null;
   const profileOptions = useMemo(
@@ -1178,9 +1177,8 @@ export function SettingsPage() {
     : null;
   const accountProfile = accountSnapshot.profile;
   const accountEntitlement = accountSnapshot.entitlement;
-  const accountAvatarUrl = useSafeArtworkSource(safeAccountAvatarUrl(accountProfile?.avatarUrl), {
-    pendingRemote: 'hide',
-  });
+  const accountAvatarUrl = useAccountAvatarUrl(accountProfile?.avatarUrl, musicProvider);
+  const accountLabel = accountProfile?.nickname.trim() || t('account.guest');
   const accountStateLabel = (() => {
     switch (accountSnapshot.state) {
       case 'guest':
@@ -1209,6 +1207,12 @@ export function SettingsPage() {
   const accountMessage = (() => {
     if (accountError) {
       switch (accountError) {
+        case 'mobile-login-required':
+          return t('account.mobileLoginRequired');
+        case 'backend':
+          return t('account.backendMessage');
+        case 'configuration':
+          return t('account.configurationMessage');
         case 'network':
           return t('account.networkMessage', { provider: musicProvider.displayName });
         case 'authorization':
@@ -1252,6 +1256,7 @@ export function SettingsPage() {
     ? {
         free: t('account.tierFree'),
         'green-diamond': t('account.tierGreenDiamond'),
+        'music-vip': t('account.tierMusicVip'),
         'super-vip': t('account.tierSuperVip'),
         unknown: t('account.tierUnknown'),
       }[accountEntitlement.tier]
@@ -1556,6 +1561,22 @@ export function SettingsPage() {
       <SettingsSection title={t('lyrics.title')} description={t('lyrics.description')}>
         <div className="settings-card">
           <SettingRow
+            title={t('lyrics.chineseScript')}
+            description={t('lyrics.chineseScriptDescription')}
+            control={
+              <Select
+                value={preferences.lyrics.chineseScript}
+                options={[
+                  { value: 'original', label: t('lyrics.originalScript') },
+                  { value: 'traditional', label: t('lyrics.traditionalScript') },
+                ]}
+                onChange={(chineseScript) => preferences.updateLyrics({ chineseScript })}
+                ariaLabel={t('lyrics.chineseScript')}
+                icon={Languages}
+              />
+            }
+          />
+          <SettingRow
             className="settings-row--presets"
             title={t('lyricsPresets.title')}
             description={t('lyricsPresets.description')}
@@ -1571,6 +1592,17 @@ export function SettingsPage() {
                 onChange={(translation) => preferences.updateLyrics({ translation })}
                 ariaLabel={t('lyrics.visibilityLabel', { name: t('lyrics.translation') })}
                 icon={Languages}
+              />
+            }
+          />
+          <SettingRow
+            title={t('lyrics.commentDanmaku')}
+            description={t('lyrics.commentDanmakuDescription')}
+            control={
+              <Toggle
+                checked={preferences.lyrics.commentDanmaku}
+                onChange={(commentDanmaku) => preferences.updateLyrics({ commentDanmaku })}
+                label={t('lyrics.commentDanmaku')}
               />
             }
           />
@@ -1828,6 +1860,11 @@ export function SettingsPage() {
             }
           />
         </div>
+        {provider.error && (
+          <p className="settings-error" title={provider.error}>
+            {errors('settingsFailed')}
+          </p>
+        )}
       </SettingsSection>
 
       {host.windowControls && (
@@ -2270,20 +2307,21 @@ export function SettingsPage() {
             </div>
           )}
           <div className="settings-account-profile">
-            {accountAvatarUrl ? (
-              <img
-                className="settings-account-profile__avatar"
-                src={accountAvatarUrl}
-                alt={t('account.avatarAlt', { nickname: accountProfile?.nickname ?? '' })}
-              />
-            ) : (
-              <span className="settings-provider-mark" aria-hidden="true">
-                <ShieldCheck size={16} />
-              </span>
-            )}
+            <AccountAvatar
+              className="settings-account-profile__avatar"
+              identity={{
+                avatarUrl: accountAvatarUrl,
+                label: accountLabel,
+                initial: Array.from(accountLabel)[0] ?? 'L',
+              }}
+            />
             <div className="settings-account-profile__identity">
-              <strong>{accountProfile?.nickname ?? t('account.guest')}</strong>
-              <span>{accountProfile?.maskedIdentity ?? accountStateLabel}</span>
+              <strong>{accountLabel}</strong>
+              <span>
+                {accountProfile?.maskedIdentity === 'authenticated'
+                  ? accountStateLabel
+                  : (accountProfile?.maskedIdentity ?? accountStateLabel)}
+              </span>
             </div>
             {accountProvider ? (
               accountSnapshot.state === 'authenticated' ? (
@@ -2350,33 +2388,53 @@ export function SettingsPage() {
           <SettingRow
             title={t('storage.usage')}
             description={
-              provider.cache
+              storage.cache
                 ? t('storage.summary', {
-                    size: formatBytes(provider.cache.totalBytes, locale),
+                    size: formatBytes(storage.cache.totalBytes, locale),
                     files: number.format(
-                      provider.cache.mediaEntries + provider.cache.artworkEntries,
+                      storage.cache.mediaEntries +
+                        storage.cache.artworkEntries +
+                        (storage.cache.componentEntries ?? 0),
                     ),
-                    metadata: number.format(provider.cache.metadataEntries),
-                    lyrics: number.format(provider.cache.lyricEntries),
+                    metadata: number.format(storage.cache.metadataEntries),
+                    lyrics: number.format(storage.cache.lyricEntries),
                   })
-                : t('storage.unavailable')
+                : t(
+                    !storage.available
+                      ? 'storage.unavailable'
+                      : storage.loading
+                        ? 'storage.loading'
+                        : storage.error
+                          ? 'storage.readFailed'
+                          : 'storage.loading',
+                  )
             }
             control={
               <button
                 type="button"
                 className="button button--secondary"
-                onClick={() => void provider.clearCache()}
-                disabled={!provider.available || provider.busy}
+                onClick={() => void storage.clearCache()}
+                disabled={!storage.available || storage.clearing || storage.loading}
               >
-                <Database size={14} /> {t('storage.clear')}
+                <Database size={14} /> {t(storage.clearing ? 'storage.clearing' : 'storage.clear')}
               </button>
             }
           />
         </div>
-        {provider.error && (
-          <p className="settings-error" title={provider.error}>
-            {errors('settingsFailed')}
+        {storage.error && (
+          <p className="settings-error" role="alert">
+            {t(storage.error === 'clear' ? 'storage.clearFailed' : 'storage.readFailed')}
           </p>
+        )}
+        {storage.available && (
+          <button
+            type="button"
+            className="settings-refresh"
+            onClick={() => void storage.refresh()}
+            disabled={storage.loading || storage.clearing}
+          >
+            <RefreshCw size={13} /> {t('storage.refresh')}
+          </button>
         )}
       </SettingsSection>
 

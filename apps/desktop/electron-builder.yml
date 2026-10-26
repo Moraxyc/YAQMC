@@ -29,6 +29,9 @@ files:
   - resources/icon.png
   - resources/icon.icns
   - '!dist/**/*.map'
+  # The client is bundled by esbuild; workspace dependency collection otherwise
+  # includes its source, tests and fixtures in the production archive.
+  - '!node_modules/@yaqmc/client{,/**}'
 extraMetadata:
   main: dist/main/index.js
 extraResources:

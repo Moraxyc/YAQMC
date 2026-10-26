@@ -6,7 +6,7 @@ use base64::Engine as _;
 use lyrics_crypto::decrypter::qrc::decrypter::decrypt_lyrics as decrypt_qrc;
 #[cfg(test)]
 use md5::{Digest as Md5Digest, Md5};
-use quick_xml::{escape::unescape, events::Event, Reader};
+use quick_xml::escape::unescape;
 use reqwest::Client;
 #[cfg(test)]
 use reqwest::RequestBuilder;
@@ -1670,11 +1670,53 @@ impl QQMusicService {
         LibrarySnapshot::default()
     }
 
+    pub(crate) async fn song_comments(
+        &self,
+        request: yaqmc_provider_api::SongCommentsRequest,
+    ) -> Result<yaqmc_provider_api::SongCommentsPage, QQMusicError> {
+        self.song_comments_with_cancellation(request, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    pub(crate) async fn song_comments_with_cancellation(
+        &self,
+        request: yaqmc_provider_api::SongCommentsRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<yaqmc_provider_api::SongCommentsPage, QQMusicError> {
+        request
+            .validate()
+            .map_err(|_| QQMusicError::InvalidRequest)?;
+        let generation = self.account_generation();
+        let song = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(QQMusicError::Cancelled),
+            song = self.song(request.song_id.clone()) => song?,
+        };
+        let song_id = song
+            .provider
+            .as_ref()
+            .and_then(|reference| reference.numeric_id)
+            .and_then(|id| i64::try_from(id).ok())
+            .filter(|id| *id > 0)
+            .ok_or(QQMusicError::NotFound)?;
+        let result = crate::qmapi::comments::song_comments_with_cancellation(
+            &self.client.catalog,
+            song_id,
+            &request,
+            cancellation,
+        )
+        .await?;
+        if generation != self.account_generation() {
+            return Err(QQMusicError::Cancelled);
+        }
+        Ok(result)
+    }
+
     pub async fn lyrics(&self, song_id: String) -> Result<Option<LyricDocument>, QQMusicError> {
         let mid = strip_entity_prefix(&song_id, "qqmusic:track:");
         // Include the normalized-document schema/parser revision so fixes do not
         // leave already-cached lyric documents permanently malformed.
-        let key = format!("qqmusic:lyrics:v3:{mid}");
+        let key = format!("qqmusic:lyrics:v4:{mid}");
         if let Some(document) = self
             .storage
             .get_json(&key, false)
@@ -3969,7 +4011,7 @@ fn old_playability(
 
 fn source_candidates(_track_mid: &str, media_mid: &str) -> Vec<SourceCandidate> {
     let master = SourceCandidate {
-        filename: format!("AIM0{media_mid}.mflac"),
+        filename: qqmusic_api::playback::PlaybackFile::Master.filename(media_mid),
         cache_label: "master-mflac",
         format: AudioFormat::Flac,
         codec: AudioCodec::Flac,
@@ -3981,7 +4023,7 @@ fn source_candidates(_track_mid: &str, media_mid: &str) -> Vec<SourceCandidate> 
         client_supported: true,
     };
     let hi_res = SourceCandidate {
-        filename: format!("RS01{media_mid}.flac"),
+        filename: qqmusic_api::playback::PlaybackFile::HiRes.filename(media_mid),
         cache_label: "hi-res-flac",
         format: AudioFormat::Flac,
         codec: AudioCodec::Flac,
@@ -3993,7 +4035,7 @@ fn source_candidates(_track_mid: &str, media_mid: &str) -> Vec<SourceCandidate> 
         client_supported: true,
     };
     let encrypted_lossless = SourceCandidate {
-        filename: format!("F0M0{media_mid}.mflac"),
+        filename: qqmusic_api::playback::PlaybackFile::EncryptedLossless.filename(media_mid),
         cache_label: "lossless-mflac",
         format: AudioFormat::Flac,
         codec: AudioCodec::Flac,
@@ -4005,7 +4047,7 @@ fn source_candidates(_track_mid: &str, media_mid: &str) -> Vec<SourceCandidate> 
         client_supported: true,
     };
     let lossless = SourceCandidate {
-        filename: format!("F000{media_mid}.flac"),
+        filename: qqmusic_api::playback::PlaybackFile::Lossless.filename(media_mid),
         cache_label: "lossless-flac",
         format: AudioFormat::Flac,
         codec: AudioCodec::Flac,
@@ -4017,7 +4059,7 @@ fn source_candidates(_track_mid: &str, media_mid: &str) -> Vec<SourceCandidate> 
         client_supported: true,
     };
     let high = SourceCandidate {
-        filename: format!("M800{media_mid}.mp3"),
+        filename: qqmusic_api::playback::PlaybackFile::High.filename(media_mid),
         cache_label: "high-mp3",
         format: AudioFormat::Mp3,
         codec: AudioCodec::Mp3,
@@ -4029,7 +4071,7 @@ fn source_candidates(_track_mid: &str, media_mid: &str) -> Vec<SourceCandidate> 
         client_supported: true,
     };
     let standard = SourceCandidate {
-        filename: format!("M500{media_mid}.mp3"),
+        filename: qqmusic_api::playback::PlaybackFile::Standard.filename(media_mid),
         cache_label: "standard-mp3",
         format: AudioFormat::Mp3,
         codec: AudioCodec::Mp3,
@@ -4041,7 +4083,7 @@ fn source_candidates(_track_mid: &str, media_mid: &str) -> Vec<SourceCandidate> 
         client_supported: true,
     };
     let aac = SourceCandidate {
-        filename: format!("C400{media_mid}.m4a"),
+        filename: qqmusic_api::playback::PlaybackFile::Aac.filename(media_mid),
         cache_label: "efficient-aac",
         format: AudioFormat::Aac,
         codec: AudioCodec::Aac,
@@ -4053,7 +4095,7 @@ fn source_candidates(_track_mid: &str, media_mid: &str) -> Vec<SourceCandidate> 
         client_supported: true,
     };
     let preview = SourceCandidate {
-        filename: format!("RS02{media_mid}.mp3"),
+        filename: qqmusic_api::playback::PlaybackFile::Preview.filename(media_mid),
         cache_label: "official-preview-mp3",
         format: AudioFormat::Mp3,
         codec: AudioCodec::Mp3,
@@ -4089,272 +4131,66 @@ pub(crate) fn decrypt_provider_lyric(value: &str) -> Option<String> {
 }
 
 pub(crate) fn parse_qrc_document(song_mid: &str, raw: &str) -> Option<LyricDocument> {
-    let content = extract_qrc_content(raw).unwrap_or_else(|| raw.to_owned());
-    let mut lines = Vec::new();
-    for (line_number, raw_line) in content.lines().enumerate() {
-        let line = raw_line.trim();
-        let Some((line_start, line_duration, body)) = parse_qrc_line_header(line) else {
-            continue;
-        };
-        let line_end = line_start.saturating_add(line_duration);
-        let words = parse_qrc_words(body, line_start, line_end);
-        let text = if words.is_empty() {
-            clean_text(body)
-        } else {
-            words.iter().map(|word| word.text.as_str()).collect()
-        };
-        if text.trim().is_empty() {
-            continue;
-        }
-        lines.push(LyricLine {
-            id: format!("qqmusic:{song_mid}:qrc:{line_number}"),
-            start_ms: Some(line_start),
-            end_ms: Some(line_end),
-            text,
-            translation: None,
-            romanization: None,
-            vocalist_id: None,
-            words,
-        });
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    Some(LyricDocument {
-        song_id: track_id(song_mid),
-        sync_mode: if lines.iter().any(|line| !line.words.is_empty()) {
-            LyricSyncMode::Word
-        } else {
-            LyricSyncMode::Line
-        },
-        metadata: LyricMetadata {
-            source_label: "QQ Music QRC".to_owned(),
-            language: None,
-            translated_language: None,
-            offset_ms: 0,
-        },
-        vocalists: vec![],
-        lines,
-    })
-}
-
-fn extract_qrc_content(raw: &str) -> Option<String> {
-    if !raw.trim_start().starts_with('<') {
-        return None;
-    }
-    let mut reader = Reader::from_str(raw);
-    reader.config_mut().trim_text(false);
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
-                for attribute in element.attributes().flatten() {
-                    if attribute.key.as_ref() == b"LyricContent" {
-                        let decoded = reader.decoder().decode(&attribute.value).ok()?;
-                        return quick_xml::escape::unescape(&decoded)
-                            .ok()
-                            .map(|value| value.into_owned());
-                    }
-                }
-            }
-            Ok(Event::Eof) | Err(_) => return None,
-            _ => {}
-        }
-    }
-}
-
-fn parse_qrc_line_header(line: &str) -> Option<(u64, u64, &str)> {
-    let close = line.find(']')?;
-    let header = line.strip_prefix('[')?.get(..close - 1)?;
-    let mut parts = header.split(',');
-    let start = parts.next()?.trim().parse().ok()?;
-    let duration = parts.next()?.trim().parse().ok()?;
-    Some((start, duration, &line[close + 1..]))
-}
-
-fn parse_qrc_words(body: &str, line_start: u64, line_end: u64) -> Vec<LyricWord> {
-    let mut words = Vec::new();
-    let mut text_start = 0;
-    let mut scan = 0;
-    while scan < body.len() {
-        let Some(open_offset) = body[scan..].find('(') else {
-            break;
-        };
-        let open = scan + open_offset;
-        let Some(close_offset) = body[open + 1..].find(')') else {
-            break;
-        };
-        let close = open + 1 + close_offset;
-        let timing = &body[open + 1..close];
-        let values = timing.split(',').take(3).map(str::trim).collect::<Vec<_>>();
-        let parsed = values.len() >= 2
-            && values[0]
-                .chars()
-                .all(|character| character.is_ascii_digit())
-            && values[1]
-                .chars()
-                .all(|character| character.is_ascii_digit());
-        if !parsed {
-            // A literal parenthesis may immediately wrap a timed word, for example
-            // `花田错 ((342,114)Live)`. Resume one byte after the candidate opening
-            // parenthesis so the nested timing marker is still considered.
-            scan = open + 1;
-            continue;
-        }
-        let start = values[0].parse::<u64>().unwrap_or(line_start);
-        let duration = values[1].parse::<u64>().unwrap_or(0);
-        let text = &body[text_start..open];
-        if !text.is_empty() {
-            words.push(LyricWord {
-                start_ms: start.max(line_start),
-                end_ms: start.saturating_add(duration).min(line_end).max(start),
-                text: text.to_owned(),
-            });
-        }
-        text_start = close + 1;
-        scan = close + 1;
-    }
-    if text_start < body.len() {
-        let trailing = &body[text_start..];
-        if !trailing.is_empty() {
-            let start = words.last().map_or(line_start, |word| word.end_ms);
-            words.push(LyricWord {
-                start_ms: start,
-                end_ms: line_end.max(start),
-                text: trailing.to_owned(),
-            });
-        }
-    }
-    words
+    qqmusic_api::lyric_parser::parse_playback_qrc(raw)
+        .map(|lyric| map_parsed_lyric(song_mid, lyric))
 }
 
 pub(crate) fn parse_lrc_document(song_mid: &str, raw: &str) -> Option<LyricDocument> {
-    let timed = parse_lrc_timed(raw);
-    if timed.is_empty() {
-        let plain = raw
-            .lines()
-            .filter(|line| !line.trim_start().starts_with('['))
-            .map(clean_text)
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>();
-        if plain.is_empty() {
-            return None;
-        }
-        return Some(LyricDocument {
-            song_id: track_id(song_mid),
-            sync_mode: LyricSyncMode::Unsynchronized,
-            metadata: LyricMetadata {
-                source_label: "QQ Music lyrics".to_owned(),
-                language: None,
-                translated_language: None,
-                offset_ms: lrc_offset(raw),
-            },
-            vocalists: vec![],
-            lines: plain
-                .into_iter()
-                .enumerate()
-                .map(|(index, text)| LyricLine {
-                    id: format!("qqmusic:{song_mid}:plain:{index}"),
-                    start_ms: None,
-                    end_ms: None,
-                    text,
-                    translation: None,
-                    romanization: None,
-                    vocalist_id: None,
-                    words: vec![],
-                })
-                .collect(),
-        });
-    }
-    let mut lines = Vec::with_capacity(timed.len());
-    for (index, (start_ms, text)) in timed.iter().enumerate() {
-        if text.trim().is_empty() {
-            continue;
-        }
-        lines.push(LyricLine {
-            id: format!("qqmusic:{song_mid}:lrc:{index}"),
-            start_ms: Some(*start_ms),
-            end_ms: timed.get(index + 1).map(|(next, _)| *next),
-            text: text.clone(),
-            translation: None,
-            romanization: None,
-            vocalist_id: None,
-            words: vec![],
-        });
-    }
-    Some(LyricDocument {
+    qqmusic_api::lyric_parser::parse_playback_lrc(raw)
+        .map(|lyric| map_parsed_lyric(song_mid, lyric))
+}
+
+fn map_parsed_lyric(
+    song_mid: &str,
+    lyric: qqmusic_api::lyric_parser::ParsedLyric,
+) -> LyricDocument {
+    use qqmusic_api::lyric_parser::LyricFormat;
+    let (id_format, source_label) = match lyric.format {
+        LyricFormat::Qrc => ("qrc", "QQ Music QRC"),
+        LyricFormat::Lrc => ("lrc", "QQ Music LRC"),
+        LyricFormat::Plain => ("plain", "QQ Music lyrics"),
+    };
+    let sync_mode = if lyric.format == LyricFormat::Plain {
+        LyricSyncMode::Unsynchronized
+    } else if lyric.lines.iter().any(|line| !line.words.is_empty()) {
+        LyricSyncMode::Word
+    } else {
+        LyricSyncMode::Line
+    };
+    LyricDocument {
+        comments: Vec::new(),
         song_id: track_id(song_mid),
-        sync_mode: LyricSyncMode::Line,
+        sync_mode,
         metadata: LyricMetadata {
-            source_label: "QQ Music LRC".to_owned(),
+            source_label: source_label.to_owned(),
             language: None,
             translated_language: None,
-            offset_ms: lrc_offset(raw),
+            offset_ms: lyric.offset_ms,
         },
-        vocalists: vec![],
-        lines,
-    })
-}
-
-fn parse_lrc_timed(raw: &str) -> Vec<(u64, String)> {
-    let mut lines = Vec::new();
-    for raw_line in raw.lines() {
-        let mut remaining = raw_line.trim();
-        let mut timestamps = Vec::new();
-        while let Some(rest) = remaining.strip_prefix('[') {
-            let Some(close) = rest.find(']') else {
-                break;
-            };
-            let tag = &rest[..close];
-            if let Some(timestamp) = parse_lrc_timestamp(tag) {
-                timestamps.push(timestamp);
-            }
-            remaining = &rest[close + 1..];
-        }
-        let text = clean_text(remaining);
-        for timestamp in timestamps {
-            lines.push((timestamp, text.clone()));
-        }
+        vocalists: Vec::new(),
+        lines: lyric
+            .lines
+            .into_iter()
+            .map(|line| LyricLine {
+                id: format!("qqmusic:{song_mid}:{id_format}:{}", line.index),
+                start_ms: line.start_ms,
+                end_ms: line.end_ms,
+                text: line.text,
+                translation: None,
+                romanization: None,
+                vocalist_id: None,
+                words: line
+                    .words
+                    .into_iter()
+                    .map(|word| LyricWord {
+                        start_ms: word.start_ms,
+                        end_ms: word.end_ms,
+                        text: word.text,
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
-    lines.sort_by_key(|(timestamp, _)| *timestamp);
-    lines
-}
-
-fn parse_lrc_timestamp(value: &str) -> Option<u64> {
-    let parts = value.split(':').map(str::trim).collect::<Vec<_>>();
-    let (hours, minutes, seconds) = match parts.as_slice() {
-        [minutes, seconds] => (
-            0,
-            minutes.parse::<u64>().ok()?,
-            seconds.parse::<f64>().ok()?,
-        ),
-        [hours, minutes, seconds] => (
-            hours.parse::<u64>().ok()?,
-            minutes.parse::<u64>().ok()?,
-            seconds.parse::<f64>().ok()?,
-        ),
-        _ => return None,
-    };
-    if !seconds.is_finite() || seconds < 0.0 || minutes >= 60 || seconds >= 60.0 {
-        return None;
-    }
-    Some(
-        hours
-            .saturating_mul(3_600_000)
-            .saturating_add(minutes.saturating_mul(60_000))
-            .saturating_add((seconds * 1_000.0).round() as u64),
-    )
-}
-
-fn lrc_offset(raw: &str) -> i64 {
-    raw.lines()
-        .find_map(|line| {
-            line.trim()
-                .strip_prefix("[offset:")?
-                .strip_suffix(']')?
-                .parse()
-                .ok()
-        })
-        .unwrap_or(0)
 }
 
 pub(crate) fn attach_companion_lyrics(
@@ -4362,8 +4198,12 @@ pub(crate) fn attach_companion_lyrics(
     translation: Option<&str>,
     romanization: Option<&str>,
 ) {
-    let translation = translation.map(parse_lrc_timed).unwrap_or_default();
-    let romanization = romanization.map(parse_lrc_timed).unwrap_or_default();
+    let translation = translation
+        .map(qqmusic_api::lyric_parser::parse_timed_lrc)
+        .unwrap_or_default();
+    let romanization = romanization
+        .map(qqmusic_api::lyric_parser::parse_timed_lrc)
+        .unwrap_or_default();
     for line in &mut document.lines {
         let Some(start) = line.start_ms else {
             continue;
@@ -4438,17 +4278,8 @@ fn normalize_cdn_base(value: &str) -> Option<String> {
 }
 
 pub(crate) fn normalize_cdn_url(base: &str, path: &str) -> Result<String, QQMusicError> {
-    let base = reqwest::Url::parse(base).map_err(|_| QQMusicError::MalformedResponse)?;
-    let url = base
-        .join(path)
-        .map_err(|_| QQMusicError::MalformedResponse)?;
-    let host = url.host_str().ok_or(QQMusicError::MalformedResponse)?;
-    if url.scheme() != "https"
-        || !(host.ends_with(".qqmusic.qq.com") || host.ends_with(".tc.qq.com"))
-    {
-        return Err(QQMusicError::MalformedResponse);
-    }
-    Ok(url.to_string())
+    qqmusic_api::playback::normalize_cdn_url(base, path)
+        .map_err(|_| QQMusicError::MalformedResponse)
 }
 
 fn clean_text(value: &str) -> String {

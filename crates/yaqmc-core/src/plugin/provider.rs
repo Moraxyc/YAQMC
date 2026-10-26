@@ -27,6 +27,7 @@ use yaqmc_provider_api::{
     RecommendationBatch, RecommendationProvider, RecommendationRequest, RemotePlayHistoryItem,
     RenamePlaylistRequest, ResolvedPlaybackSource, SearchResult, Song, DEFAULT_PROFILE_ID,
 };
+use yaqmc_provider_api::{CommentsProvider, SongCommentsPage, SongCommentsRequest};
 
 #[cfg(test)]
 use yaqmc_provider_api::ShareTarget;
@@ -35,10 +36,24 @@ use crate::plugin::{
     component::{component_credential_headers, ComponentRuntimeError, ProviderComponent},
     component_host::ComponentHostContext,
     manifest::{PluginManifest, ProviderCapability, ProviderWorld},
-    network::{component_request_origin, proxy_component_media_range},
+    network::{component_request_origin, origin_allowed, proxy_component_media_range},
 };
 
 const MAX_CATALOG_VALUE_DEPTH: usize = 64;
+
+#[async_trait]
+impl CommentsProvider for ComponentProviderAdapter {
+    async fn song_comments(
+        &self,
+        request: SongCommentsRequest,
+    ) -> ProviderResult<SongCommentsPage> {
+        request.validate()?;
+        let page: SongCommentsPage = self
+            .call_account_scoped(ProviderCapability::Comments, "comments.list", &request)
+            .await?;
+        page.bounded()
+    }
+}
 const MAX_CATALOG_VALUE_NODES: usize = 100_000;
 const MAX_CATALOG_STRING_BYTES: usize = 1024 * 1024;
 const COMPONENT_OAUTH_ATTEMPT_TTL: Duration = Duration::from_secs(10 * 60);
@@ -55,6 +70,7 @@ pub enum ComponentProviderError {
 /// provider-neutral contracts. The component never receives Core trait objects.
 pub struct ComponentProviderAdapter {
     provider_id: String,
+    platform: Option<String>,
     display_name: String,
     component: ProviderComponent,
     host: Option<ComponentHostContext>,
@@ -81,9 +97,19 @@ impl ComponentProviderAdapter {
         host: Option<ComponentHostContext>,
     ) -> Result<Arc<Self>, ComponentProviderError> {
         let provider = manifest
-            .provider
-            .as_ref()
+            .provider_declarations()
+            .into_iter()
+            .next()
             .ok_or(ComponentProviderError::MissingProvider)?;
+        Self::from_manifest_with_provider(manifest, provider, component_bytes, host)
+    }
+
+    pub fn from_manifest_with_provider(
+        manifest: &PluginManifest,
+        provider: &crate::plugin::manifest::ProviderPluginManifest,
+        component_bytes: &[u8],
+        host: Option<ComponentHostContext>,
+    ) -> Result<Arc<Self>, ComponentProviderError> {
         let declared = provider
             .capabilities
             .iter()
@@ -106,6 +132,7 @@ impl ComponentProviderAdapter {
         }
         Ok(Arc::new(Self {
             provider_id: provider_id.clone(),
+            platform: provider.platform.clone(),
             display_name: provider
                 .name
                 .clone()
@@ -145,6 +172,10 @@ impl ComponentProviderAdapter {
                 .declared
                 .contains(&ProviderCapability::Lyrics)
                 .then(|| Arc::clone(self) as Arc<dyn LyricsProvider>),
+            comments: self
+                .declared
+                .contains(&ProviderCapability::Comments)
+                .then(|| Arc::clone(self) as Arc<dyn CommentsProvider>),
             playback: self
                 .declared
                 .contains(&ProviderCapability::Playback)
@@ -167,7 +198,14 @@ impl ComponentProviderAdapter {
         Req: Serialize + ?Sized,
         Response: DeserializeOwned,
     {
-        let payload = serde_json::to_string(request)
+        let mut request = serde_json::to_value(request)
+            .map_err(|_| ProviderCommandError::invalid_request("provider request is invalid"))?;
+        if let Some(platform) = &self.platform {
+            if let Some(object) = request.as_object_mut() {
+                object.insert("platform".to_owned(), Value::String(platform.clone()));
+            }
+        }
+        let payload = serde_json::to_string(&request)
             .map_err(|_| ProviderCommandError::invalid_request("provider request is invalid"))?;
         let response = self
             .component
@@ -306,7 +344,7 @@ impl ComponentProviderAdapter {
         let attempt_id = component_random_token(host, "oauth_")?;
         let state = component_random_token(host, "state_")?;
         self.advance_account_generation();
-        let prepared: ComponentOAuthPrepare = self
+        let mut prepared: ComponentOAuthPrepare = self
             .call_account_scoped(
                 ProviderCapability::Account,
                 "account.auth.prepare-oauth",
@@ -323,24 +361,32 @@ impl ComponentProviderAdapter {
             ));
         }
         let authorize_url = validate_component_oauth_url(host, &prepared.url)?;
-        if !oauth_state_matches(&authorize_url, &state) {
+        if prepared.browser_session.is_none() && !oauth_state_matches(&authorize_url, &state) {
             return Err(ProviderCommandError::invalid_request(
                 "provider authorization state is invalid",
             ));
         }
-        for allowed in &prepared.navigation_allowlist {
-            validate_component_oauth_url(host, allowed)?;
+        if let Some(policy) = &prepared.browser_session {
+            super::browser_session::validate_policy(host, policy)?;
         }
-        if !prepared
-            .navigation_allowlist
-            .iter()
-            .any(|allowed| prepared.url.starts_with(allowed))
-        {
+        for allowed in &mut prepared.navigation_allowlist {
+            let url = validate_component_oauth_url(host, allowed)?;
+            // Legacy components used a trailing-slash origin as an origin grant.
+            // Return the explicit glob so Core and desktop enforce the same rule.
+            if allowed.ends_with('/')
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none()
+            {
+                allowed.push_str("**");
+            }
+        }
+        if !component_oauth_navigation_matches(&authorize_url, &prepared.navigation_allowlist) {
             return Err(ProviderCommandError::invalid_request(
                 "provider authorization URL is outside its navigation allowlist",
             ));
         }
-        validate_component_oauth_url(host, &prepared.callback_matcher.url_prefix)?;
+        validate_component_oauth_callback_url(host, &prepared.callback_matcher.url_prefix)?;
         self.oauth_attempts
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -350,9 +396,11 @@ impl ComponentProviderAdapter {
                     state,
                     callback_prefix: prepared.callback_matcher.url_prefix.clone(),
                     created_at_ms: component_now_ms(),
+                    browser_session: prepared.browser_session.clone(),
                 },
             );
         Ok(OAuthPrepareResult {
+            browser_session: prepared.browser_session,
             attempt_id,
             url: prepared.url,
             mobile_url: None,
@@ -366,11 +414,12 @@ impl ComponentProviderAdapter {
     }
 
     fn catalog_capability_projection(&self) -> CatalogProviderCapabilities {
+        let catalog = self.declared.contains(&ProviderCapability::Catalog);
         CatalogProviderCapabilities {
-            search: true,
-            album: true,
-            artist: true,
-            playlist: true,
+            search: catalog,
+            album: catalog,
+            artist: catalog,
+            playlist: catalog,
             lyrics: self.declared.contains(&ProviderCapability::Lyrics),
             word_timed_lyrics: self.declared.contains(&ProviderCapability::Lyrics),
             streaming: self.declared.contains(&ProviderCapability::Playback),
@@ -391,10 +440,27 @@ impl ComponentProviderAdapter {
     }
 }
 
+fn bounded_catalog_capabilities(
+    reported: CatalogProviderCapabilities,
+    granted: CatalogProviderCapabilities,
+) -> CatalogProviderCapabilities {
+    CatalogProviderCapabilities {
+        search: reported.search && granted.search,
+        album: reported.album && granted.album,
+        artist: reported.artist && granted.artist,
+        playlist: reported.playlist && granted.playlist,
+        lyrics: reported.lyrics && granted.lyrics,
+        word_timed_lyrics: reported.word_timed_lyrics && granted.word_timed_lyrics,
+        streaming: reported.streaming && granted.streaming,
+        quality_selection: reported.quality_selection && granted.quality_selection,
+    }
+}
+
 struct ComponentOAuthAttempt {
     state: String,
     callback_prefix: String,
     created_at_ms: u64,
+    browser_session: Option<yaqmc_provider_api::BrowserSessionPolicy>,
 }
 
 #[derive(Deserialize)]
@@ -403,6 +469,8 @@ struct ComponentOAuthPrepare {
     url: String,
     navigation_allowlist: Vec<String>,
     callback_matcher: ComponentOAuthCallbackMatcher,
+    #[serde(default)]
+    browser_session: Option<yaqmc_provider_api::BrowserSessionPolicy>,
 }
 
 #[derive(Deserialize)]
@@ -481,12 +549,77 @@ fn validate_component_oauth_url(
     Ok(url)
 }
 
+fn validate_component_oauth_callback_url(
+    host: &ComponentHostContext,
+    value: &str,
+) -> ProviderResult<reqwest::Url> {
+    if value.len() > 4_096 {
+        return Err(ProviderCommandError::invalid_request(
+            "provider authorization callback URL is invalid",
+        ));
+    }
+    let url = reqwest::Url::parse(value).map_err(|_| {
+        ProviderCommandError::invalid_request("provider authorization callback URL is invalid")
+    })?;
+    let origin = component_request_origin(&json!({ "url": value })).map_err(|_| {
+        ProviderCommandError::invalid_request("provider authorization callback URL is invalid")
+    })?;
+    let host_allowed = host.allowed_origins().contains(&origin);
+    let yaqmc_callback = origin == "http://127.0.0.1:43821"
+        && url.path().starts_with("/oauth/")
+        && url.fragment().is_none();
+    if !host_allowed && !yaqmc_callback {
+        return Err(ProviderCommandError::invalid_request(
+            "provider authorization callback origin is not granted",
+        ));
+    }
+    Ok(url)
+}
+
 fn oauth_state_matches(url: &reqwest::Url, expected: &str) -> bool {
     let mut values = url
         .query_pairs()
         .filter(|(name, _)| name == "state")
         .map(|(_, value)| value.into_owned());
     values.next().as_deref() == Some(expected) && values.next().is_none()
+}
+
+// Match the desktop OAuth window policy: /** grants an origin, ** grants
+// a URL prefix within the same path, and an unmarked URL is exact.
+fn component_oauth_navigation_matches(url: &reqwest::Url, allowlist: &[String]) -> bool {
+    allowlist.iter().any(|allowed| {
+        if let Some(prefix) = allowed.strip_suffix("/**") {
+            return reqwest::Url::parse(prefix).is_ok_and(|base| url.origin() == base.origin());
+        }
+        if let Some(prefix) = allowed.strip_suffix("**") {
+            return reqwest::Url::parse(prefix).is_ok_and(|base| {
+                url.origin() == base.origin()
+                    && if prefix.ends_with('/') {
+                        url.path().starts_with(base.path())
+                    } else {
+                        url.path() == base.path()
+                    }
+                    && url.as_str().starts_with(prefix)
+            });
+        }
+        url.as_str() == allowed
+    })
+}
+
+fn component_oauth_callback_matches(url: &reqwest::Url, prefix: &str) -> bool {
+    let Ok(expected) = reqwest::Url::parse(prefix) else {
+        return false;
+    };
+    url.origin() == expected.origin()
+        && url.path() == expected.path()
+        && expected
+            .fragment()
+            .is_none_or(|fragment| url.fragment() == Some(fragment))
+        && expected.query_pairs().all(|(name, _)| {
+            url.query_pairs()
+                .filter(|(key, _)| key == &name)
+                .eq(expected.query_pairs().filter(|(key, _)| key == &name))
+        })
 }
 
 fn prune_oauth_attempts(attempts: &mut HashMap<String, ComponentOAuthAttempt>) {
@@ -542,7 +675,7 @@ impl ComponentPlaybackResolution {
             .as_deref()
             .is_some_and(|value| validate_playback_text(value, 128).is_err())
         {
-            return Err(PlaybackSourceError::TrackUnavailable);
+            return Err(PlaybackSourceError::ProviderFailure);
         }
         let format = match self.format.as_str() {
             "mp3" => yaqmc_provider_api::AudioFormat::Mp3,
@@ -557,11 +690,11 @@ impl ComponentPlaybackResolution {
                 let host = adapter
                     .host
                     .as_ref()
-                    .ok_or(PlaybackSourceError::TrackUnavailable)?;
+                    .ok_or(PlaybackSourceError::ProviderUnavailable)?;
                 let bytes = host
                     .cache_get(&key)
-                    .map_err(|_| PlaybackSourceError::TrackUnavailable)?
-                    .ok_or(PlaybackSourceError::TrackUnavailable)?;
+                    .map_err(|_| PlaybackSourceError::CacheFailure)?
+                    .ok_or(PlaybackSourceError::CacheFailure)?;
                 if bytes.len() as u64 != self.content_length {
                     return Err(PlaybackSourceError::RangeUnsupported);
                 }
@@ -574,11 +707,11 @@ impl ComponentPlaybackResolution {
                 let host = adapter
                     .host
                     .as_ref()
-                    .ok_or(PlaybackSourceError::TrackUnavailable)?;
+                    .ok_or(PlaybackSourceError::ProviderUnavailable)?;
                 let origin = component_request_origin(&request)
-                    .map_err(|_| PlaybackSourceError::TrackUnavailable)?;
-                if !host.allowed_origins().contains(&origin) {
-                    return Err(PlaybackSourceError::TrackUnavailable);
+                    .map_err(|_| PlaybackSourceError::ProviderFailure)?;
+                if !origin_allowed(host.allowed_origins(), &origin) {
+                    return Err(PlaybackSourceError::ProviderFailure);
                 }
                 Arc::new(ComponentHttpsPlaybackSource {
                     request,
@@ -749,7 +882,7 @@ fn validate_playback_text(value: &str, max_bytes: usize) -> Result<(), PlaybackS
         || value.len() > max_bytes
         || value.chars().any(|character| character.is_control())
     {
-        Err(PlaybackSourceError::TrackUnavailable)
+        Err(PlaybackSourceError::ProviderFailure)
     } else {
         Ok(())
     }
@@ -762,7 +895,7 @@ impl CatalogProvider for ComponentProviderAdapter {
     }
 
     async fn catalog_status(&self) -> ProviderStatus {
-        ProviderStatus {
+        let mut status = ProviderStatus {
             provider_id: self.provider_id.clone(),
             profile_id: DEFAULT_PROFILE_ID.to_owned(),
             display_name: self.display_name.clone(),
@@ -776,7 +909,25 @@ impl CatalogProvider for ComponentProviderAdapter {
             message: String::new(),
             preferred_quality: AudioQualityPreference::Automatic,
             capabilities: self.catalog_capability_projection(),
+        };
+        if self.component.enabled()
+            && !self.component.circuit_open()
+            && self.declared.contains(&ProviderCapability::Catalog)
+        {
+            if let Ok(reported) = self
+                .call_scoped::<_, ProviderStatus>(
+                    ProviderCapability::Catalog,
+                    "catalog.status",
+                    &json!({}),
+                )
+                .await
+            {
+                status.preferred_quality = reported.preferred_quality;
+                status.capabilities =
+                    bounded_catalog_capabilities(reported.capabilities, status.capabilities);
+            }
         }
+        status
     }
 
     async fn catalog_search(
@@ -837,12 +988,55 @@ impl CatalogProvider for ComponentProviderAdapter {
     }
 
     async fn catalog_playlist(&self, id: String) -> ProviderResult<Playlist> {
-        self.call_scoped(
-            ProviderCapability::Catalog,
-            "catalog.playlist",
-            &json!({ "id": id }),
-        )
-        .await
+        // Components can page large playlists without spending a whole Wasm
+        // invocation's fuel on metadata the UI does not need in that page.
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PlaylistPage {
+            #[serde(flatten)]
+            playlist: Playlist,
+            #[serde(default)]
+            next_cursor: Option<String>,
+        }
+        let mut cursor: Option<String> = None;
+        let mut combined: Option<Playlist> = None;
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..250 {
+            let page: PlaylistPage = self
+                .call(
+                    ProviderCapability::Catalog,
+                    "catalog.playlist",
+                    &json!({"id": id, "cursor": cursor}),
+                )
+                .await?;
+            let playlist = page.playlist.validate_scope(&self.provider_id)?;
+            if playlist.id != id {
+                return Err(ProviderCommandError::invalid_request(
+                    "provider playlist identity changed",
+                ));
+            }
+            if let Some(combined) = combined.as_mut() {
+                combined.tracks.extend(playlist.tracks);
+            } else {
+                combined = Some(playlist);
+            }
+            match page.next_cursor {
+                None => return Ok(combined.expect("first page was assigned")),
+                Some(next)
+                    if !next.is_empty() && next.len() <= 128 && seen.insert(next.clone()) =>
+                {
+                    cursor = Some(next)
+                }
+                _ => {
+                    return Err(ProviderCommandError::invalid_request(
+                        "provider playlist pagination made no progress",
+                    ))
+                }
+            }
+        }
+        Err(ProviderCommandError::invalid_request(
+            "provider playlist exceeds the supported page count",
+        ))
     }
 
     async fn catalog_home(&self, refresh: bool) -> ProviderResult<HomeFeed> {
@@ -916,12 +1110,22 @@ impl RecommendationProvider for ComponentProviderAdapter {
 #[async_trait]
 impl LyricsProvider for ComponentProviderAdapter {
     async fn lyrics_for_song(&self, song_id: String) -> ProviderResult<Option<LyricDocument>> {
-        self.call_account_scoped(
-            ProviderCapability::Lyrics,
-            "lyrics.get",
-            &json!({ "songId": song_id }),
-        )
-        .await
+        let document: Option<LyricDocument> = self
+            .call_account_scoped(
+                ProviderCapability::Lyrics,
+                "lyrics.get",
+                &json!({ "songId": song_id }),
+            )
+            .await?;
+        Ok(document.map(|mut document| {
+            document.comments.truncate(15);
+            for comment in &mut document.comments {
+                comment.sanitize();
+                comment.content = comment.content.chars().take(160).collect();
+                comment.author = comment.author.chars().take(60).collect();
+            }
+            document
+        }))
     }
 }
 
@@ -970,7 +1174,8 @@ impl PlaybackSourceProvider for ComponentProviderAdapter {
             .validate_scope(&self.provider_id)?;
         status.provider_id = self.provider_id.clone();
         status.display_name = self.display_name.clone();
-        status.capabilities = self.catalog_capability_projection();
+        status.capabilities =
+            bounded_catalog_capabilities(status.capabilities, self.catalog_capability_projection());
         Ok(status)
     }
 
@@ -1007,9 +1212,14 @@ impl AccountProvider for ComponentProviderAdapter {
 
     async fn account_prepare_login(&self, method_id: &str) -> ProviderResult<OAuthPrepareResult> {
         let methods = self.account_login_methods().await?;
-        if !methods.iter().any(|method| method.id == method_id) {
+        let Some(method) = methods.iter().find(|method| method.id == method_id) else {
             return Err(ProviderCommandError::invalid_request(
                 "account login method is unavailable",
+            ));
+        };
+        if method.flow != AccountLoginFlow::OAuth {
+            return Err(ProviderCommandError::invalid_request(
+                "account login method does not use OAuth",
             ));
         }
         self.prepare_component_oauth_login(method_id).await
@@ -1038,6 +1248,13 @@ impl ProviderAccount for ComponentProviderAdapter {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone()
         })
+    }
+
+    async fn refresh_account(&self) -> ProviderResult<AccountSnapshot> {
+        let snapshot = self
+            .call_account_scoped(ProviderCapability::Account, "account.snapshot", &json!({}))
+            .await?;
+        self.sanitize_snapshot(snapshot)
     }
 
     async fn favorite_songs(
@@ -1238,8 +1455,9 @@ impl ProviderAccount for ComponentProviderAdapter {
         let host = self.host.as_ref().ok_or_else(|| {
             ProviderCommandError::adapter("provider authorization host is unavailable")
         })?;
-        validate_component_oauth_url(host, callback_url.as_str())?;
-        if !callback_url.as_str().starts_with(&attempt.callback_prefix)
+        validate_component_oauth_callback_url(host, callback_url.as_str())?;
+        if attempt.browser_session.is_some()
+            || !component_oauth_callback_matches(&callback_url, &attempt.callback_prefix)
             || !oauth_state_matches(&callback_url, &attempt.state)
         {
             return Err(ProviderCommandError::invalid_request(
@@ -1255,6 +1473,53 @@ impl ProviderAccount for ComponentProviderAdapter {
             )
             .await?;
         self.sanitize_snapshot(snapshot)
+    }
+
+    async fn complete_browser_session_login(
+        &self,
+        attempt_id: &str,
+        callback_url: reqwest::Url,
+        cookies: Vec<yaqmc_provider_api::BrowserSessionCookie>,
+    ) -> ProviderResult<AccountSnapshot> {
+        let attempt = {
+            let mut attempts = self
+                .oauth_attempts
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            prune_oauth_attempts(&mut attempts);
+            attempts.remove(attempt_id)
+        }
+        .ok_or_else(|| ProviderCommandError::invalid_request("authorization attempt is invalid"))?;
+        let policy = attempt.browser_session.ok_or_else(|| {
+            ProviderCommandError::invalid_request("browser session login was not requested")
+        })?;
+        if callback_url.as_str() != policy.url {
+            return Err(ProviderCommandError::invalid_request(
+                "provider browser session origin is invalid",
+            ));
+        }
+        let host = self.host.as_ref().ok_or_else(|| {
+            ProviderCommandError::adapter("provider authorization host is unavailable")
+        })?;
+        let handles = super::browser_session::import_session(host, &policy, cookies)?;
+        self.advance_account_generation();
+        let result = self.call_account_scoped(
+            ProviderCapability::Account,
+            "account.auth.complete-oauth",
+            &json!({ "attemptId": attempt_id, "browserCredentials": handles.iter().map(|(origin, handle)| json!({"origin": origin, "handle": handle})).collect::<Vec<_>>() }),
+        ).await.and_then(|snapshot: AccountSnapshot| {
+            if matches!(snapshot.account, AccountState::Authenticated { .. }) {
+                self.sanitize_snapshot(snapshot)
+            } else {
+                Err(ProviderCommandError::invalid_request("provider browser session was not authenticated"))
+            }
+        });
+        if result.is_err() {
+            for (_, handle) in &handles {
+                let _ = host.credential_delete(handle);
+            }
+        }
+        result
     }
 
     async fn cancel_oauth_login(&self, attempt_id: &str) -> ProviderResult<AccountSnapshot> {
@@ -1333,6 +1598,7 @@ impl ProviderAccount for ComponentProviderAdapter {
                 &json!({}),
             )
             .await;
+        let _ = self.account_snapshot().await;
     }
 
     async fn sign_out(&self) -> ProviderResult<AccountSnapshot> {
@@ -1373,7 +1639,7 @@ fn validate_account_login_methods(
         if !valid_account_login_method_id(&method.id)
             || method.label.trim().is_empty()
             || method.label.len() > 80
-            || method.flow != AccountLoginFlow::OAuth
+            || !matches!(method.flow, AccountLoginFlow::OAuth | AccountLoginFlow::Qr)
             || !seen.insert(method.id.as_str())
         {
             return Err(invalid_response(
@@ -1430,6 +1696,21 @@ fn sanitize_guest_error(raw: &str) -> ProviderCommandError {
         .map(|error| error.code)
         .unwrap_or_default();
     let (code, message, retryable) = match code.as_str() {
+        "provider-backend-unavailable" => (
+            "provider-backend-unavailable",
+            "the local provider service is unavailable",
+            true,
+        ),
+        "provider-unavailable" | "provider-circuit-open" => (
+            "provider-unavailable",
+            "the music plugin is unavailable",
+            false,
+        ),
+        "provider-not-configured" | "provider-configuration" => (
+            "provider-not-configured",
+            "the provider configuration is incomplete",
+            false,
+        ),
         "offline" | "network" => ("offline", "the provider is offline", true),
         "timeout" | "provider-timeout" => {
             ("provider-timeout", "the provider operation timed out", true)
@@ -1455,6 +1736,26 @@ fn sanitize_guest_error(raw: &str) -> ProviderCommandError {
             "the provider could not determine media access",
             false,
         ),
+        "membership-required" => (
+            "membership-required",
+            "the account needs a music membership for this track",
+            false,
+        ),
+        "purchase-required" => (
+            "purchase-required",
+            "the account needs to purchase this track",
+            false,
+        ),
+        "copyright-restricted" => (
+            "copyright-restricted",
+            "the platform restricts playback under its licensing",
+            false,
+        ),
+        "full-playback-unavailable" => (
+            "full-playback-unavailable",
+            "the platform returned no playable source; the reason is unconfirmed",
+            false,
+        ),
         "client-unsupported" => (
             "client-unsupported",
             "the media format is unsupported",
@@ -1474,6 +1775,11 @@ fn sanitize_guest_error(raw: &str) -> ProviderCommandError {
         "response-too-large" => (
             "response-too-large",
             "the provider response exceeded its limit",
+            false,
+        ),
+        "comments-limit-exceeded" => (
+            "comments-limit-exceeded",
+            "the complete reply thread exceeds the supported sorting limit",
             false,
         ),
         "cancelled" | "provider-cancelled" => (
@@ -1510,7 +1816,7 @@ fn sanitize_guest_error(raw: &str) -> ProviderCommandError {
     }
 }
 
-fn map_playback_command_error(error: ProviderCommandError) -> PlaybackSourceError {
+pub(super) fn map_playback_command_error(error: ProviderCommandError) -> PlaybackSourceError {
     match error.code.as_str() {
         "provider-cancelled" | "cancelled" => PlaybackSourceError::Cancelled,
         "authentication-expired" => PlaybackSourceError::AuthenticationExpired,
@@ -1518,17 +1824,22 @@ fn map_playback_command_error(error: ProviderCommandError) -> PlaybackSourceErro
             PlaybackSourceError::EntitlementInsufficient
         }
         "entitlement-unknown" => PlaybackSourceError::EntitlementUnknown,
+        "membership-required" => PlaybackSourceError::MembershipRequired,
+        "purchase-required" => PlaybackSourceError::PurchaseRequired,
+        "copyright-restricted" => PlaybackSourceError::CopyrightRestricted,
+        "full-playback-unavailable" => PlaybackSourceError::UrlUnavailable,
+        "unsupported-operation" => PlaybackSourceError::ProviderUnsupported,
+        "provider-unavailable" | "provider-not-configured" | "provider-backend-unavailable" => {
+            PlaybackSourceError::ProviderUnavailable
+        }
         "client-unsupported" => PlaybackSourceError::DecoderUnsupported,
         "url-expired" => PlaybackSourceError::UrlExpired,
         "range-unsupported" => PlaybackSourceError::RangeUnsupported,
         "response-too-large" => PlaybackSourceError::ResponseTooLarge,
         "offline" | "rate-limited" | "provider-timeout" | "network" => PlaybackSourceError::Network,
-        "provider-unavailable"
-        | "provider-circuit-open"
-        | "song-unavailable"
-        | "not-found"
-        | "unavailable" => PlaybackSourceError::TrackUnavailable,
-        _ => PlaybackSourceError::TrackUnavailable,
+        "provider-circuit-open" => PlaybackSourceError::ProviderUnavailable,
+        "song-unavailable" | "not-found" | "unavailable" => PlaybackSourceError::TrackUnavailable,
+        _ => PlaybackSourceError::ProviderFailure,
     }
 }
 
@@ -1591,6 +1902,69 @@ mod tests {
         assert!(!wire.contains("secret"));
         assert!(!wire.contains("https://"));
         assert!(!wire.contains("Authorization"));
+    }
+
+    #[test]
+    fn playback_restrictions_survive_guest_sanitization_without_secrets() {
+        for (code, expected) in [
+            (
+                "membership-required",
+                PlaybackSourceError::MembershipRequired,
+            ),
+            ("purchase-required", PlaybackSourceError::PurchaseRequired),
+            (
+                "copyright-restricted",
+                PlaybackSourceError::CopyrightRestricted,
+            ),
+            (
+                "unsupported-operation",
+                PlaybackSourceError::ProviderUnsupported,
+            ),
+            (
+                "provider-unavailable",
+                PlaybackSourceError::ProviderUnavailable,
+            ),
+            (
+                "full-playback-unavailable",
+                PlaybackSourceError::UrlUnavailable,
+            ),
+            ("malformed-response", PlaybackSourceError::ProviderFailure),
+            ("unknown-error", PlaybackSourceError::ProviderFailure),
+        ] {
+            let safe = sanitize_guest_error(
+                &json!({
+                    "code": code,
+                    "message": "secret https://signed.invalid/song?token=secret",
+                    "retryable": true,
+                })
+                .to_string(),
+            );
+            assert!(!safe.message.contains("secret"));
+            assert_eq!(map_playback_command_error(safe), expected, "{code}");
+        }
+        let fault = map_runtime_error(ComponentRuntimeError::SandboxFault);
+        assert_eq!(
+            map_playback_command_error(fault),
+            PlaybackSourceError::ProviderFailure
+        );
+    }
+
+    #[test]
+    fn local_service_errors_keep_actionable_codes_without_guest_messages() {
+        for code in [
+            "provider-backend-unavailable",
+            "provider-not-configured",
+            "comments-limit-exceeded",
+        ] {
+            let error = sanitize_guest_error(
+                &serde_json::json!({
+                    "code": code, "message": "secret", "retryable": false,
+                })
+                .to_string(),
+            );
+            assert_eq!(error.code, code);
+            assert!(!error.message.contains("secret"));
+        }
     }
 
     fn manifest() -> PluginManifest {
@@ -1955,16 +2329,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn component_status_reads_quality_without_expanding_authority_or_scope() {
+        let reported = json!({
+            "providerId": "dev.example.catalog", "profileId": "default",
+            "displayName": "Untrusted name", "connection": "Untrusted connection",
+            "message": "Untrusted message", "preferredQuality": "lossless",
+            "capabilities": {
+                "search": true, "album": false, "artist": false, "playlist": false,
+                "lyrics": true, "wordTimedLyrics": true, "streaming": true,
+                "qualitySelection": true
+            }
+        });
+        let status = adapter(reported.clone()).catalog_status().await;
+        assert_eq!(status.preferred_quality, AudioQualityPreference::Lossless);
+        assert_eq!(status.provider_id, "dev.example.catalog");
+        assert_eq!(status.display_name, "Example Catalog");
+        assert_eq!(status.connection, "ready");
+        assert!(status.message.is_empty());
+        assert!(status.capabilities.search);
+        assert!(!status.capabilities.album);
+        assert!(!status.capabilities.lyrics);
+        assert!(!status.capabilities.streaming);
+        assert!(!status.capabilities.quality_selection);
+        let mut forged = reported;
+        forged["profileId"] = json!("secondary");
+        let status = adapter(forged).catalog_status().await;
+        assert_eq!(status.preferred_quality, AudioQualityPreference::Automatic);
+        assert_eq!(status.profile_id, DEFAULT_PROFILE_ID);
+        let legacy = adapter(json!({})).catalog_status().await;
+        assert_eq!(legacy.connection, "ready");
+        assert_eq!(legacy.preferred_quality, AudioQualityPreference::Automatic);
+    }
+
+    #[tokio::test]
     async fn registry_projection_exposes_only_declared_component_capabilities() {
         let adapter = adapter(json!({}));
         let capabilities = adapter.registry_capabilities();
         assert!(capabilities.catalog.is_some());
         assert!(capabilities.playback.is_none());
         assert!(capabilities.account.is_none());
+        assert!(capabilities.comments.is_none());
         adapter.component().disable();
         assert_eq!(
             adapter.catalog_status().await.connection,
             "disabled".to_owned()
+        );
+    }
+
+    #[tokio::test]
+    async fn comments_component_capability_is_optional_bounded_and_revocable() {
+        let adapter = capability_adapter(
+            ProviderCapability::Comments,
+            json!({
+                "items":(0..21).map(|i| json!({"id":i.to_string(), "content":"hello",
+                    "author":"listener", "likedCount":u64::MAX})).collect::<Vec<_>>(),
+                "nextCursor":"after-21", "total":1000, "supportedSorts":["hot","new"], "repliesSupported":false
+            }),
+        );
+        assert!(adapter.registry_capabilities().comments.is_some());
+        let request = SongCommentsRequest {
+            song_id: "track1".to_owned(),
+            sort: yaqmc_provider_api::CommentSort::Hot,
+            limit: 20,
+            cursor: None,
+            parent_id: None,
+        };
+        let page = adapter.song_comments(request.clone()).await.unwrap();
+        assert_eq!(page.items.len(), 21);
+        assert_eq!(page.items[0].liked_count, 9_007_199_254_740_991);
+        assert_eq!(page.next_cursor.as_deref(), Some("after-21"));
+        adapter.component().disable();
+        assert!(adapter.song_comments(request).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_lyric_comments_sanitize_optional_fields_before_reaching_the_renderer() {
+        let adapter = capability_adapter(
+            ProviderCapability::Lyrics,
+            json!({
+                "songId":"song-1", "syncMode":"line",
+                "metadata":{"sourceLabel":"legacy", "offsetMs":0}, "lines":[], "vocalists":[],
+                "comments":[{
+                    "id":"1", "content":"文".repeat(200), "author":"名".repeat(80),
+                    "likedCount":u64::MAX, "timeMs":u64::MAX,
+                    "replyCount":u64::MAX, "avatarUrl":"javascript:invalid",
+                    "replyTo":{"author":"名".repeat(120), "content":"quote"}
+                }]
+            }),
+        );
+        let document = adapter
+            .lyrics_for_song("song-1".into())
+            .await
+            .unwrap()
+            .unwrap();
+        let comment = &document.comments[0];
+        assert!(comment.time_ms.is_none());
+        assert!(comment.avatar_url.is_none());
+        assert_eq!(comment.liked_count, 9_007_199_254_740_991);
+        assert_eq!(comment.reply_count, Some(9_007_199_254_740_991));
+        assert_eq!(comment.content.chars().count(), 160);
+        assert_eq!(comment.author.chars().count(), 60);
+        assert_eq!(
+            comment.reply_to.as_ref().unwrap().author.chars().count(),
+            100
         );
     }
 
@@ -2134,6 +2601,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restoring_a_session_publishes_the_authoritative_account_snapshot() {
+        let mut response = guest_snapshot(9_999);
+        response["state"] = json!("session-expired");
+        let adapter = account_adapter(response);
+        assert_eq!(
+            adapter
+                .last_account_snapshot
+                .lock()
+                .expect("snapshot lock")
+                .state_name(),
+            "guest"
+        );
+        adapter.restore_session().await;
+        let restored = adapter.last_account_snapshot.lock().expect("snapshot lock");
+        assert_eq!(restored.state_name(), "session-expired");
+        assert_eq!(restored.provider_id, "dev.example.account");
+        assert!(restored.revision > 0);
+        assert_ne!(restored.revision, 9_999);
+    }
+
+    #[tokio::test]
+    async fn explicit_account_refresh_propagates_invalid_responses() {
+        let adapter = account_adapter(json!({"unexpected":"not an account snapshot"}));
+        assert_eq!(adapter.account_snapshot().await.state_name(), "guest");
+        assert!(adapter.refresh_account().await.is_err());
+        assert_eq!(
+            adapter.last_account_snapshot.lock().unwrap().state_name(),
+            "guest"
+        );
+    }
+
+    #[tokio::test]
     async fn account_pages_ignore_guest_supplied_auth_revision() {
         let adapter = account_adapter(json!({
             "items": [],
@@ -2148,6 +2647,168 @@ mod tests {
             .await
             .expect("favorite page");
         assert_eq!(page.auth_revision, adapter.account_generation());
+    }
+
+    #[test]
+    fn oauth_navigation_globs_match_desktop_rules() {
+        for (url, rule, expected) in [
+            (
+                "https://accounts.spotify.com/authorize?state=x",
+                "https://accounts.spotify.com/**",
+                true,
+            ),
+            (
+                "https://accounts.spotify.com/login",
+                "https://accounts.spotify.com",
+                false,
+            ),
+            (
+                "https://accounts.spotify.com/authorize?state=x",
+                "https://accounts.spotify.com/authorize**",
+                true,
+            ),
+            (
+                "https://accounts.spotify.com/authorize-other?state=x",
+                "https://accounts.spotify.com/authorize**",
+                false,
+            ),
+            (
+                "https://accounts.spotify.com/authorize?state=x",
+                "https://accounts.spotify.com/authorize",
+                false,
+            ),
+            (
+                "https://accounts.spotify.com/login",
+                "https://accounts.spotify.com/login",
+                true,
+            ),
+            (
+                "https://accounts.spotify.com.evil.test/login",
+                "https://accounts.spotify.com/**",
+                false,
+            ),
+            (
+                "https://accounts.spotify.com:444/login",
+                "https://accounts.spotify.com/**",
+                false,
+            ),
+            (
+                "http://accounts.spotify.com/login",
+                "https://accounts.spotify.com/**",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                component_oauth_navigation_matches(
+                    &reqwest::Url::parse(url).unwrap(),
+                    &[rule.to_owned()]
+                ),
+                expected,
+                "{url} against {rule}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_session_completion_is_single_use_and_rolls_back_rejected_credentials() {
+        use crate::credentials::{CredentialError, CredentialStore};
+        use std::sync::atomic::AtomicUsize;
+        #[derive(Default)]
+        struct Counter(AtomicUsize);
+        impl CredentialStore for Counter {
+            fn load(&self, _: &str) -> Result<Option<String>, CredentialError> {
+                Ok(None)
+            }
+            fn save(&self, _: &str, _: &str) -> Result<(), CredentialError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            fn delete(&self, _: &str) -> Result<(), CredentialError> {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let mut authenticated = guest_snapshot(1);
+        authenticated["state"] = json!("authenticated");
+        authenticated["profile"] =
+            json!({"nickname": "Fixture", "maskedIdentity": "authenticated", "avatarUrl": null});
+        authenticated["entitlement"] = json!({"tier":"unknown", "membership":"unknown", "permittedQualities":[], "restrictions":[]});
+        for (response, accepted) in [
+            (authenticated, true),
+            (guest_snapshot(1), false),
+            (json!({}), false),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let store = Arc::new(Counter::default());
+            let services = ComponentHostServices::open(
+                root.path().join("data"),
+                root.path().join("cache"),
+                store.clone(),
+                tokio::runtime::Handle::current(),
+            )
+            .unwrap();
+            let host = services.for_plugin(
+                "dev.example.account",
+                "dev.example.account",
+                std::collections::HashSet::from(["https://accounts.example.com".to_owned()]),
+            );
+            let source = static_test_component(&response.to_string());
+            let adapter = ComponentProviderAdapter::from_manifest_with_host(
+                &account_manifest(),
+                source.as_bytes(),
+                Some(host),
+            )
+            .unwrap();
+            adapter.oauth_attempts.lock().unwrap().insert(
+                "web".to_owned(),
+                ComponentOAuthAttempt {
+                    state: "host-state".to_owned(),
+                    callback_prefix: "https://accounts.example.com/callback".to_owned(),
+                    created_at_ms: component_now_ms(),
+                    browser_session: Some(yaqmc_provider_api::BrowserSessionPolicy {
+                        url: "https://accounts.example.com/".to_owned(),
+                        cookie_names: vec!["session".to_owned()],
+                        required_cookie_names: vec!["session".to_owned()],
+                        credential_origins: vec!["https://accounts.example.com".to_owned()],
+                        format: yaqmc_provider_api::BrowserSessionFormat::Cookie,
+                    }),
+                },
+            );
+            let callback = reqwest::Url::parse("https://accounts.example.com/").unwrap();
+            let result = adapter
+                .complete_browser_session_login(
+                    "web",
+                    callback.clone(),
+                    vec![yaqmc_provider_api::BrowserSessionCookie {
+                        name: "session".to_owned(),
+                        value: "synthetic".to_owned(),
+                    }],
+                )
+                .await;
+            assert_eq!(result.is_ok(), accepted);
+            assert_eq!(store.0.load(Ordering::SeqCst), usize::from(accepted));
+            assert!(adapter
+                .complete_browser_session_login("web", callback, Vec::new())
+                .await
+                .is_err());
+            assert_eq!(store.0.load(Ordering::SeqCst), usize::from(accepted));
+        }
+    }
+
+    #[test]
+    fn oauth_callback_compares_path_and_fixed_query_parameters() {
+        let prefix = "http://127.0.0.1:43821/oauth/spotify/callback?client=fixture";
+        for (url, expected) in [
+            ("http://127.0.0.1:43821/oauth/spotify/callback?state=x&client=fixture&code=test", true),
+            ("http://127.0.0.1:43821/oauth/spotify/callback-other?client=fixture&state=x", false),
+            ("http://127.0.0.1:43821/oauth/spotify/callback/extra?client=fixture&state=x", false),
+            ("http://127.0.0.1:43822/oauth/spotify/callback?client=fixture&state=x", false),
+            ("http://127.0.0.1:43821/oauth/spotify/callback?client=fixture-extra&state=x", false),
+            ("http://127.0.0.1:43821/oauth/spotify/callback?client=fixture&client=fixture&state=x", false),
+            ("http://127.0.0.1:43821/oauth/spotify/callback?state=x", false),
+        ] {
+            assert_eq!(component_oauth_callback_matches(&reqwest::Url::parse(url).unwrap(), prefix), expected, "{url}");
+        }
     }
 
     #[test]

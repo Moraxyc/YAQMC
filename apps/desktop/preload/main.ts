@@ -11,6 +11,8 @@ type EventFrame = {
 };
 
 contextBridge.exposeInMainWorld('yaqmc', {
+  invokeResult: (method: string, params?: unknown): Promise<InvokeReply> =>
+    ipcRenderer.invoke('yaqmc:invoke', { method, params }),
   invoke: async (method: string, params?: unknown) => {
     const reply = (await ipcRenderer.invoke('yaqmc:invoke', { method, params })) as InvokeReply;
     if (!reply || typeof reply !== 'object' || !('ok' in reply)) {

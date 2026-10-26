@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { isNativeRuntime } from './native-player-runtime';
+import type { ActiveProviderSelection } from './provider-context';
 import {
   cachedArtworkSource,
   isCacheableArtworkSource,
@@ -18,6 +19,7 @@ function hasSameOrigin(left: URL, right: URL): boolean {
 export function classifyArtworkSource(
   source: string | null | undefined,
   currentOrigin: string,
+  provider?: ActiveProviderSelection,
 ): ArtworkSourceClassification | null {
   const candidate = source?.trim();
   if (!candidate || candidate.startsWith('//')) return null;
@@ -38,7 +40,7 @@ export function classifyArtworkSource(
   if (hasSameOrigin(parsed, current) || parsed.origin === 'http://asset.localhost') {
     return { kind: 'direct', source: candidate };
   }
-  if (isCacheableArtworkSource(candidate)) {
+  if (isCacheableArtworkSource(candidate, provider)) {
     return { kind: 'cache', source: candidate };
   }
   return null;
@@ -51,38 +53,49 @@ interface ResolvedArtwork {
 
 export function useSafeArtworkSource(
   source: string | null | undefined,
-  options?: { pendingRemote?: 'allow' | 'hide' },
+  options?: { pendingRemote?: 'allow' | 'hide'; provider?: ActiveProviderSelection | null },
 ): string | null {
   const native = isNativeRuntime;
   const hidePendingRemote = options?.pendingRemote === 'hide';
   const candidate = source?.trim() || null;
+  const scopedProvider =
+    options?.provider && options.provider.providerId !== 'qqmusic' ? options.provider : undefined;
+  const providerId = scopedProvider?.providerId;
+  const profileId = scopedProvider?.profileId;
   const currentOrigin = globalThis.location?.origin ?? '';
-  const classification = candidate ? classifyArtworkSource(candidate, currentOrigin) : null;
+  const classification = candidate
+    ? classifyArtworkSource(candidate, currentOrigin, scopedProvider)
+    : null;
   const cacheRequest = native && classification?.kind === 'cache' ? classification.source : null;
+  const cacheKey = JSON.stringify([providerId, profileId, cacheRequest]);
   const [resolved, setResolved] = useState<ResolvedArtwork | null>(null);
   const generation = useRef(0);
 
   useEffect(() => {
     const requestGeneration = ++generation.current;
     if (!cacheRequest) return;
-    const request = cachedArtworkSource(cacheRequest);
+    const request = cachedArtworkSource(
+      cacheRequest,
+      providerId && profileId ? { providerId, profileId } : undefined,
+    );
     if (!request) return;
     void request
       .then((value) => {
         if (generation.current === requestGeneration && isCachedArtworkDataUri(value)) {
-          setResolved({ requested: cacheRequest, source: value });
+          setResolved({ requested: cacheKey, source: value });
         }
       })
       .catch(() => undefined);
     return () => {
       if (generation.current === requestGeneration) generation.current += 1;
     };
-  }, [cacheRequest]);
+  }, [cacheRequest, cacheKey, providerId, profileId]);
 
   if (!candidate) return null;
   if (!native) return candidate;
   if (classification?.kind === 'direct') return classification.source;
-  if (cacheRequest && resolved?.requested === cacheRequest) return resolved.source;
-  if (classification?.kind === 'cache') return hidePendingRemote ? null : classification.source;
+  if (cacheRequest && resolved?.requested === cacheKey) return resolved.source;
+  if (classification?.kind === 'cache')
+    return hidePendingRemote || scopedProvider ? null : classification.source;
   return null;
 }

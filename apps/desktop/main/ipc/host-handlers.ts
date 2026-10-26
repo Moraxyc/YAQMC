@@ -914,7 +914,7 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
       if (!loginProvider) {
         throw new Error('qqmusic_auth_oauth_start requires loginProvider');
       }
-      await openOAuthWindow(loginProvider, {
+      const authorization = await openOAuthWindow(loginProvider, {
         createWindow: oauth.createWindow,
         fromPartition: oauth.fromPartition,
         isPackaged: oauth.isPackaged,
@@ -924,14 +924,14 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
           oauth.invoke('auth_oauth_complete', completeParams),
         auth_oauth_cancel: (cancelParams) => oauth.invoke('auth_oauth_cancel', cancelParams),
       });
-      return oauth.invoke('qqmusic_account_snapshot');
+      return authorization.completion;
     };
     handlers.provider_auth_oauth_start = async (params) => {
       const input = providerOAuthFromParams(params);
       if (!input) {
         throw new Error('provider_auth_oauth_start requires providerId and methodId');
       }
-      await openProviderOAuthWindow(input, {
+      const authorization = await openProviderOAuthWindow(input, {
         createWindow: oauth.createWindow,
         fromPartition: oauth.fromPartition,
         isPackaged: oauth.isPackaged,
@@ -942,7 +942,7 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
         provider_auth_oauth_cancel: (cancelParams) =>
           oauth.invoke('provider_auth_oauth_cancel', cancelParams),
       });
-      return oauth.invoke('provider_account_snapshot', { providerId: input.providerId });
+      return authorization.completion;
     };
   }
 

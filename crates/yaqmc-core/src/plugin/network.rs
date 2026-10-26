@@ -1,5 +1,6 @@
-use crate::plugin::permissions::is_blocked_ip;
+use crate::plugin::permissions::{is_blocked_ip, LOCAL_BACKEND_ORIGIN};
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::redirect::Policy;
 use serde_json::{json, Value};
 use std::{collections::HashSet, net::SocketAddr, time::Duration};
@@ -10,8 +11,22 @@ pub const COMPONENT_MAX_RESPONSE_BODY: usize = 4 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 3;
 const MAX_URL_BYTES: usize = 4096;
 const REQUEST_TIMEOUT_SECS: u64 = 10;
+const MAX_COMPONENT_IMAGE_BYTES: usize = 256 * 1024;
 
-const ALLOWED_REQUEST_HEADERS: &[&str] = &["accept", "content-type", "user-agent"];
+const ALLOWED_REQUEST_HEADERS: &[&str] = &[
+    "accept",
+    "clienttime",
+    "content-type",
+    "dfid",
+    "kg-rec",
+    "kg-rf",
+    "kg-rc",
+    "kg-thash",
+    "kg-tid",
+    "mid",
+    "user-agent",
+    "x-router",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ComponentCredentialHeader {
@@ -35,6 +50,7 @@ struct TransportResponse {
     status: u16,
     location: Option<String>,
     body: Vec<u8>,
+    set_cookies: Vec<String>,
     content_range: Option<String>,
     content_length: Option<u64>,
     mime_type: Option<String>,
@@ -81,7 +97,13 @@ impl NetworkTransport for ReqwestTransport {
             .redirect(Policy::none())
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-            .resolve_to_addrs(&request.host, &request.addresses)
+            .resolve_to_addrs(&request.host, &request.addresses);
+        let client = if is_local_backend_url(&request.url) {
+            client.no_proxy()
+        } else {
+            client
+        };
+        let client = client
             .build()
             .map_err(|_| "plugin network client could not be created".to_owned())?;
         let mut builder = client.request(request.method, request.url);
@@ -109,11 +131,19 @@ impl NetworkTransport for ReqwestTransport {
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
+        let set_cookies = response
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         if status.is_redirection() {
             return Ok(TransportResponse {
                 status: status.as_u16(),
                 location,
                 body: Vec::new(),
+                set_cookies,
                 content_range,
                 content_length,
                 mime_type,
@@ -136,6 +166,7 @@ impl NetworkTransport for ReqwestTransport {
             status: status.as_u16(),
             location,
             body,
+            set_cookies,
             content_range,
             content_length,
             mime_type,
@@ -238,6 +269,11 @@ async fn proxy_request_with(
     resolver: &dyn AddressResolver,
     transport: &dyn NetworkTransport,
 ) -> Result<Value, String> {
+    let response_limit = if payload.get("responseFormat").and_then(Value::as_str) == Some("image") {
+        response_limit.min(MAX_COMPONENT_IMAGE_BYTES)
+    } else {
+        response_limit
+    };
     let response = proxy_raw_request_with(
         allowed_origins,
         payload,
@@ -248,11 +284,65 @@ async fn proxy_request_with(
         transport,
     )
     .await?;
-    Ok(json!({
+    let body = if (200..300).contains(&response.status)
+        && payload.get("responseFormat").and_then(Value::as_str) == Some("image")
+    {
+        component_image_data_uri(&response.body, response.mime_type.as_deref())?
+    } else {
+        String::from_utf8_lossy(&response.body).into_owned()
+    };
+    let mut output = json!({
         "ok": (200..300).contains(&response.status),
         "status": response.status,
-        "body": String::from_utf8_lossy(&response.body),
-    }))
+        "body": body,
+        "setCookies": response.set_cookies,
+        "contentLength": response.content_length,
+        "mimeType": response.mime_type,
+    });
+    if (200..300).contains(&response.status)
+        && payload.get("responseFormat").and_then(Value::as_str) == Some("json")
+    {
+        if let Ok(body) = serde_json::from_slice::<Value>(&response.body) {
+            output["bodyJson"] = body;
+            if let Some(fields) = output.as_object_mut() {
+                fields.remove("body");
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn component_image_data_uri(bytes: &[u8], content_type: Option<&str>) -> Result<String, String> {
+    if bytes.len() > MAX_COMPONENT_IMAGE_BYTES {
+        return Err("component artwork response is too large".to_owned());
+    }
+    let content_type = content_type
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(
+        content_type.as_str(),
+        "image/png" | "image/jpeg" | "image/jpg" | "image/gif" | "image/webp"
+    ) {
+        return Err("component artwork response is not a supported raster image".to_owned());
+    }
+    // NetEase avatar CDNs can label PNG bytes as image/jpg. Keep accepting only
+    // bounded raster responses, but derive the data URI type from the bytes.
+    let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        "image/jpeg"
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        "image/gif"
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        "image/webp"
+    } else {
+        return Err("component artwork response is not a supported raster image".to_owned());
+    };
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
 async fn proxy_raw_request_with(
@@ -294,7 +384,7 @@ async fn proxy_raw_request_with(
             reqwest::Url::parse(&current).map_err(|_| "network url is invalid".to_owned())?;
         deny_url(&parsed)?;
         let origin = origin_of(&parsed)?;
-        if !allowed_origins.contains(&origin) {
+        if !origin_allowed(allowed_origins, &origin) {
             return Err("plugin network origin is not granted".into());
         }
         let host = parsed
@@ -303,7 +393,7 @@ async fn proxy_raw_request_with(
             .to_ascii_lowercase();
         let port = parsed.port_or_known_default().unwrap_or(443);
         let addresses = resolver.resolve(&host, port).await?;
-        validate_resolved_addresses(&addresses)?;
+        validate_resolved_addresses(&addresses, is_local_backend_url(&parsed))?;
         let mut hop_headers = headers.clone();
         hop_headers.extend_from_slice(internal_headers);
         for credential in credential_headers {
@@ -364,6 +454,19 @@ pub(crate) fn component_request_origin(payload: &Value) -> Result<String, String
     origin_of(&parsed)
 }
 
+pub(crate) fn origin_allowed(allowed_origins: &HashSet<String>, origin: &str) -> bool {
+    if allowed_origins.contains(origin) {
+        return true;
+    }
+    if !allowed_origins.contains("https://music.126.net") {
+        return false;
+    }
+    let Some(host) = origin.strip_prefix("https://") else {
+        return false;
+    };
+    host.ends_with(".music.126.net") && host.len() > "music.126.net".len() + 1
+}
+
 fn validate_headers(value: Option<&Value>) -> Result<Vec<(String, String)>, String> {
     let headers = value
         .and_then(Value::as_object)
@@ -381,12 +484,21 @@ fn validate_headers(value: Option<&Value>) -> Result<Vec<(String, String)>, Stri
         if text.len() > 240 || text.contains('\n') || text.contains('\r') {
             return Err("plugin network header is invalid".into());
         }
+        if header == "kg-tid"
+            && (!text.bytes().all(|byte| byte.is_ascii_digit())
+                || !text.parse::<u16>().is_ok_and(|value| value > 0))
+        {
+            return Err("plugin protocol header is invalid".into());
+        }
         validated.push((header, text.to_owned()));
     }
     Ok(validated)
 }
 
 fn origin_of(url: &reqwest::Url) -> Result<String, String> {
+    if is_local_backend_url(url) {
+        return Ok(LOCAL_BACKEND_ORIGIN.to_owned());
+    }
     if url.scheme() != "https" {
         return Err("plugin network requests must use https".into());
     }
@@ -400,14 +512,17 @@ fn origin_of(url: &reqwest::Url) -> Result<String, String> {
 }
 
 fn deny_url(url: &reqwest::Url) -> Result<(), String> {
-    if url.scheme() != "https" {
-        return Err("plugin network requests must use https".into());
-    }
     if !url.username().is_empty() || url.password().is_some() {
         return Err("plugin network urls cannot include credentials".into());
     }
     if url.fragment().is_some() {
         return Err("plugin network urls cannot include fragments".into());
+    }
+    if is_local_backend_url(url) {
+        return Ok(());
+    }
+    if url.scheme() != "https" {
+        return Err("plugin network requests must use https".into());
     }
     let host = url
         .host_str()
@@ -425,9 +540,25 @@ fn deny_url(url: &reqwest::Url) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_resolved_addresses(addresses: &[SocketAddr]) -> Result<(), String> {
+fn is_local_backend_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port() == Some(43821)
+}
+
+fn validate_resolved_addresses(
+    addresses: &[SocketAddr],
+    allow_local_backend: bool,
+) -> Result<(), String> {
     if addresses.is_empty() {
         return Err("plugin network host could not be resolved".into());
+    }
+    if allow_local_backend {
+        if addresses
+            .iter()
+            .all(|address| address.ip().to_string() == "127.0.0.1" && address.port() == 43821)
+        {
+            return Ok(());
+        }
+        return Err("plugin network resolved to an unexpected loopback address".into());
     }
     if addresses.iter().any(|address| is_blocked_ip(address.ip())) {
         return Err("plugin network resolved to a private or local address".into());
@@ -508,6 +639,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn official_media_root_allows_only_its_subdomains() {
+        let allowed = allowed(&["https://music.126.net"]);
+        assert!(origin_allowed(&allowed, "https://m10.music.126.net"));
+        assert!(origin_allowed(&allowed, "https://m801.music.126.net"));
+        assert!(!origin_allowed(
+            &allowed,
+            "https://music.126.net.evil.example"
+        ));
+        assert!(!origin_allowed(&allowed, "https://example.com"));
+    }
+
+    #[test]
+    fn loopback_backend_is_the_only_http_exception() {
+        let local = reqwest::Url::parse("http://127.0.0.1:43821/v1").unwrap();
+        assert_eq!(origin_of(&local).unwrap(), LOCAL_BACKEND_ORIGIN);
+        assert!(deny_url(&local).is_ok());
+        assert!(deny_url(&reqwest::Url::parse("http://127.0.0.1:43822").unwrap()).is_err());
+        assert!(deny_url(&reqwest::Url::parse("http://localhost:43821").unwrap()).is_err());
+        assert!(deny_url(&reqwest::Url::parse("http://10.0.0.1:43821").unwrap()).is_err());
+        assert!(
+            deny_url(&reqwest::Url::parse("http://127.0.0.1:43821@evil.example").unwrap()).is_err()
+        );
+        assert!(validate_resolved_addresses(&["127.0.0.1:43821".parse().unwrap()], true).is_ok());
+        assert!(validate_resolved_addresses(&["127.0.0.2:43821".parse().unwrap()], true).is_err());
+        assert!(validate_resolved_addresses(&["127.0.0.1:43822".parse().unwrap()], true).is_err());
+    }
+
     #[tokio::test]
     async fn validated_dns_addresses_are_the_addresses_given_to_transport() {
         let resolver = FakeResolver {
@@ -518,6 +677,7 @@ mod tests {
                 status: 200,
                 location: None,
                 body: b"ok".to_vec(),
+                set_cookies: Vec::new(),
                 content_range: None,
                 content_length: Some(2),
                 mime_type: None,
@@ -555,6 +715,7 @@ mod tests {
                 status: 302,
                 location: Some("https://cdn.example.com/private".to_owned()),
                 body: Vec::new(),
+                set_cookies: Vec::new(),
                 content_range: None,
                 content_length: Some(0),
                 mime_type: None,
@@ -586,6 +747,7 @@ mod tests {
                 status: 302,
                 location: Some("https://other.example.com/path".to_owned()),
                 body: Vec::new(),
+                set_cookies: Vec::new(),
                 content_range: None,
                 content_length: Some(0),
                 mime_type: None,
@@ -613,6 +775,7 @@ mod tests {
                 status: 200,
                 location: None,
                 body: b"oversized".to_vec(),
+                set_cookies: Vec::new(),
                 content_range: None,
                 content_length: Some(9),
                 mime_type: None,
@@ -643,6 +806,7 @@ mod tests {
                 status: 200,
                 location: None,
                 body: b"ok".to_vec(),
+                set_cookies: Vec::new(),
                 content_range: None,
                 content_length: Some(2),
                 mime_type: None,
@@ -696,6 +860,136 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn json_response_format_preserves_metadata_and_legacy_error_bodies() {
+        for (status, body, structured) in [
+            (200, r#"{"title":"屋顶","items":[1,2]}"#, true),
+            (200, "not json", false),
+            (403, r#"{"error":"access_denied"}"#, false),
+        ] {
+            let resolver = FakeResolver {
+                answers: Mutex::new(VecDeque::from([vec![public_address()]])),
+            };
+            let transport = FakeTransport {
+                responses: Mutex::new(VecDeque::from([TransportResponse {
+                    status,
+                    location: None,
+                    body: body.as_bytes().to_vec(),
+                    set_cookies: vec!["session=synthetic".to_owned()],
+                    content_range: None,
+                    content_length: Some(body.len() as u64),
+                    mime_type: Some("application/json".to_owned()),
+                }])),
+                pinned: Mutex::new(Vec::new()),
+                headers: Mutex::new(Vec::new()),
+            };
+            let response = proxy_request_with(
+                &allowed(&["https://api.example.com"]),
+                &json!({"url": "https://api.example.com/search", "responseFormat": "json"}),
+                1024,
+                &[],
+                &resolver,
+                &transport,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response["status"], status);
+            assert_eq!(response["contentLength"], body.len() as u64);
+            assert_eq!(response["setCookies"], json!(["session=synthetic"]));
+            if structured {
+                assert_eq!(response["bodyJson"]["title"], "屋顶");
+                assert!(response.get("body").is_none());
+            } else {
+                assert_eq!(response["body"], body);
+                assert!(response.get("bodyJson").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn component_images_require_bounded_raster_bytes_and_supported_declared_types() {
+        let png = b"\x89PNG\r\n\x1a\nsynthetic";
+        let encoded = component_image_data_uri(png, Some("image/png; charset=binary")).unwrap();
+        assert_eq!(
+            encoded,
+            format!("data:image/png;base64,{}", STANDARD.encode(png))
+        );
+        assert!(component_image_data_uri(png, Some("image/svg+xml")).is_err());
+        assert!(component_image_data_uri(png, Some("text/html")).is_err());
+        assert!(component_image_data_uri(b"<svg/>", Some("image/svg+xml")).is_err());
+        assert!(component_image_data_uri(b"<html/>", Some("image/png")).is_err());
+        assert!(component_image_data_uri(png, None).is_err());
+        assert!(
+            component_image_data_uri(&[0xff, 0xd8, 0xff, 0], Some("IMAGE/JPG"))
+                .unwrap()
+                .starts_with("data:image/jpeg;base64,")
+        );
+        let mut oversized = png.to_vec();
+        oversized.resize(MAX_COMPONENT_IMAGE_BYTES + 1, 0);
+        assert!(component_image_data_uri(&oversized, Some("image/png")).is_err());
+    }
+
+    #[test]
+    fn component_images_use_actual_raster_format_when_cdn_mime_is_wrong() {
+        let png = b"\x89PNG\r\n\x1a\nsynthetic";
+        for declared in ["image/jpg", "image/jpeg", "IMAGE/JPG; charset=binary"] {
+            assert_eq!(
+                component_image_data_uri(png, Some(declared)).unwrap(),
+                format!("data:image/png;base64,{}", STANDARD.encode(png))
+            );
+        }
+        let jpeg = &[0xff, 0xd8, 0xff, 0];
+        assert_eq!(
+            component_image_data_uri(jpeg, Some("image/png")).unwrap(),
+            format!("data:image/jpeg;base64,{}", STANDARD.encode(jpeg))
+        );
+        assert!(component_image_data_uri(b"<svg/>", Some("image/jpg")).is_err());
+        assert!(component_image_data_uri(b"<html/>", Some("image/jpeg")).is_err());
+    }
+
+    #[tokio::test]
+    async fn image_response_format_keeps_binary_bytes_and_origin_fences() {
+        let png = b"\x89PNG\r\n\x1a\nsynthetic";
+        let resolver = FakeResolver {
+            answers: Mutex::new(VecDeque::from([vec![public_address()]])),
+        };
+        let transport = FakeTransport {
+            responses: Mutex::new(VecDeque::from([TransportResponse {
+                status: 200,
+                location: None,
+                body: png.to_vec(),
+                set_cookies: Vec::new(),
+                content_range: None,
+                content_length: Some(png.len() as u64),
+                mime_type: Some("image/jpg".to_owned()),
+            }])),
+            pinned: Mutex::new(Vec::new()),
+            headers: Mutex::new(Vec::new()),
+        };
+        let request = json!({"url": "https://images.example.com/cover", "responseFormat": "image"});
+        assert!(
+            proxy_request_with(&allowed(&[]), &request, 1024, &[], &resolver, &transport)
+                .await
+                .is_err()
+        );
+        let response = proxy_request_with(
+            &allowed(&["https://images.example.com"]),
+            &request,
+            1024,
+            &[],
+            &resolver,
+            &transport,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response["body"],
+            format!("data:image/png;base64,{}", STANDARD.encode(png))
+        );
+        assert_eq!(response["contentLength"], png.len());
+        assert!(response.get("bodyJson").is_none());
+    }
+
+    #[tokio::test]
     async fn media_ranges_remain_binary_and_use_only_host_injected_range_headers() {
         let resolver = FakeResolver {
             answers: Mutex::new(VecDeque::from([vec![public_address()]])),
@@ -705,6 +999,7 @@ mod tests {
                 status: 206,
                 location: None,
                 body: vec![0xff, 0x00, 0x7f],
+                set_cookies: Vec::new(),
                 content_range: Some("bytes 3-5/9".to_owned()),
                 content_length: Some(3),
                 mime_type: Some("audio/mpeg".to_owned()),
@@ -734,5 +1029,19 @@ mod tests {
             transport.headers.lock().expect("headers").as_slice(),
             &[internal.to_vec()]
         );
+    }
+
+    #[test]
+    fn kugou_protocol_header_is_numeric_and_does_not_allow_ambient_credentials() {
+        assert!(validate_headers(Some(&serde_json::json!({"kg-tid":"255"}))).is_ok());
+        for headers in [
+            serde_json::json!({"kg-tid":"0"}),
+            serde_json::json!({"kg-tid":"65536"}),
+            serde_json::json!({"kg-tid":"255\r\nCookie:x"}),
+            serde_json::json!({"cookie":"x"}),
+            serde_json::json!({"authorization":"x"}),
+        ] {
+            assert!(validate_headers(Some(&headers)).is_err());
+        }
     }
 }

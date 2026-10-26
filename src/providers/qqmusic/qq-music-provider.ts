@@ -30,6 +30,8 @@ import {
   type SearchResult,
   type ShareTarget,
   type Song,
+  type SongCommentsPage,
+  type SongCommentsRequest,
 } from '../../domain/music';
 import type { AccountMusicProvider, MusicProvider } from '../music-provider';
 import { nativeProviderRequest as nativeRequest } from '../native/native-request';
@@ -91,6 +93,14 @@ export class QQMusicProvider implements MusicProvider, AccountMusicProvider {
 
   getLyrics(songId: EntityId, signal?: AbortSignal): Promise<LyricDocument | null> {
     return nativeRequest('qqmusic_lyrics', { songId }, signal);
+  }
+
+  getComments(request: SongCommentsRequest, signal?: AbortSignal): Promise<SongCommentsPage> {
+    return nativeRequest(
+      'provider_comments',
+      { providerId: this.id, profileId: this.profileId, request },
+      signal,
+    );
   }
 
   search(

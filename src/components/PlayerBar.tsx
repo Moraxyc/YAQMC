@@ -33,7 +33,10 @@ import { ProviderContext } from '../application/provider-context';
 import { isAccountMusicProvider } from '../providers/music-provider';
 import { formatDuration } from '../utils/format';
 import { Artwork } from './ui/Artwork';
+import { TrackAccessBadge } from './TrackAccessBadge';
 import { IconButton } from './ui/IconButton';
+import { CommentsButton } from './CommentsPanel';
+import { useCommentsPanelStore } from '../application/comments-panel-store';
 import { Select, type SelectOption } from './ui/Select';
 import { PlaybackModeControl } from './PlaybackModeControl';
 import { useTranslation } from 'react-i18next';
@@ -248,6 +251,7 @@ interface PlayerBarProps {
 }
 
 export function PlayerBar({ onToggleQueue, inert }: PlayerBarProps) {
+  const { t: comments } = useTranslation('lyrics', { keyPrefix: 'comments' });
   const { t } = useTranslation('player');
   const { t: common } = useTranslation('common');
   const pluginBar = usePluginUiSnapshot().playerBar;
@@ -291,6 +295,7 @@ export function PlayerBar({ onToggleQueue, inert }: PlayerBarProps) {
     (accountSnapshot.state !== 'authenticated' ||
       (accountSnapshot.capabilities.favoriteWrite && hasWritableProviderReference));
   const selectedQuality = sourceSelection?.requestedQuality ?? 'automatic';
+  const qualityAvailable = Boolean(current?.provider?.trackId.trim());
   const capabilityByQuality = new Map(
     sourceSelection?.qualityCapabilities?.map((capability) => [capability.quality, capability]),
   );
@@ -336,6 +341,7 @@ export function PlayerBar({ onToggleQueue, inert }: PlayerBarProps) {
             >
               <Artwork
                 artwork={current.artwork}
+                provider={current.provider}
                 className="player-bar__artwork"
                 loading="eager"
                 purpose="small"
@@ -366,8 +372,14 @@ export function PlayerBar({ onToggleQueue, inert }: PlayerBarProps) {
                   </span>
                 ))}
               </span>
+              <TrackAccessBadge song={current} />
               {playbackState !== 'playing' && playbackState !== 'paused' && (
-                <small data-state={playbackState} title={playbackStatus || undefined}>
+                <small
+                  role="status"
+                  data-state={playbackState}
+                  data-error-code={playbackError?.code}
+                  title={playbackStatus || undefined}
+                >
                   {playbackStatus}
                 </small>
               )}
@@ -409,6 +421,11 @@ export function PlayerBar({ onToggleQueue, inert }: PlayerBarProps) {
                 </ActionMenuItem>
               )}
               {compact && (
+                <ActionMenuItem onClick={() => useCommentsPanelStore.getState().open(current)}>
+                  {comments('open')}
+                </ActionMenuItem>
+              )}
+              {compact && (
                 <ActionMenuItem onClick={onToggleQueue ?? toggleQueue}>
                   {t('showQueue')}
                 </ActionMenuItem>
@@ -417,9 +434,7 @@ export function PlayerBar({ onToggleQueue, inert }: PlayerBarProps) {
                 qualityOptions.map((option) => (
                   <ActionMenuItem
                     key={option.value}
-                    disabled={
-                      current.provider?.providerId !== 'qqmusic' || Boolean(option.disabled)
-                    }
+                    disabled={!qualityAvailable || Boolean(option.disabled)}
                     onClick={() => setQuality(option.value)}
                   >
                     {selectedQuality === option.value ? '✓ ' : ''}
@@ -461,6 +476,7 @@ export function PlayerBar({ onToggleQueue, inert }: PlayerBarProps) {
       </div>
 
       <div className="player-bar__tools">
+        <CommentsButton song={current} />
         <Select
           value={selectedQuality}
           options={qualityOptions}
@@ -468,7 +484,7 @@ export function PlayerBar({ onToggleQueue, inert }: PlayerBarProps) {
           ariaLabel={t('qualityMenu')}
           icon={AudioLines}
           className="player-quality-select"
-          disabled={!current || current.provider?.providerId !== 'qqmusic'}
+          disabled={!qualityAvailable}
         />
         {!isAndroidRuntime() && supportsLyricsSurfaces() && (
           <IconButton
@@ -520,6 +536,13 @@ function playbackLabel(
 
 type PlaybackErrorKey =
   | 'errorTrackUnavailable'
+  | 'errorSourceUnconfirmed'
+  | 'errorMembership'
+  | 'errorPurchase'
+  | 'errorCopyright'
+  | 'errorPluginUnsupported'
+  | 'errorPluginUnavailable'
+  | 'errorPluginFailure'
   | 'errorNetwork'
   | 'errorOutput'
   | 'errorDecoder'
@@ -531,8 +554,14 @@ type PlaybackErrorKey =
   | 'errorCache';
 
 const playbackErrorKeys: Readonly<Record<string, PlaybackErrorKey>> = {
-  'media-url-unavailable': 'errorTrackUnavailable',
+  'media-url-unavailable': 'errorSourceUnconfirmed',
   'track-unavailable': 'errorTrackUnavailable',
+  'membership-required': 'errorMembership',
+  'purchase-required': 'errorPurchase',
+  'copyright-restricted': 'errorCopyright',
+  'provider-playback-unsupported': 'errorPluginUnsupported',
+  'provider-unavailable': 'errorPluginUnavailable',
+  'provider-playback-failed': 'errorPluginFailure',
   'media-url-expired': 'errorNetwork',
   'network-failure': 'errorNetwork',
   'output-device-unavailable': 'errorOutput',

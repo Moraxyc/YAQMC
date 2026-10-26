@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { useMusicProvider } from './provider-context';
+import { useContext, useEffect } from 'react';
+import { ProviderRegistryContext, useMusicProvider } from './provider-context';
 import { useLyricsStore } from './lyrics-store';
 import { isNativeRuntime } from './native-player-runtime';
 import { usePlayerStore } from './player-store';
@@ -9,6 +9,15 @@ import { getYaqmcClient } from './yaqmc-runtime';
 export function useLyricsCoordinator(): void {
   const { t } = useTranslation('errors');
   const provider = useMusicProvider();
+  const registry = useContext(ProviderRegistryContext);
+  const reference = usePlayerStore((state) => state.queue[state.currentIndex]?.provider);
+  const lyricsProvider = reference
+    ? (registry?.get(reference.providerId, reference.profileId)?.lyrics ??
+      (provider.id === reference.providerId && provider.profileId === reference.profileId
+        ? provider
+        : null))
+    : provider;
+  const lyricsSongId = reference?.trackId ?? null;
   const currentSongId = usePlayerStore((state) => state.queue[state.currentIndex]?.id ?? null);
   const sessionId = usePlayerStore((state) => state.sessionId);
   const currentQueueEntryId = usePlayerStore((state) => state.currentQueueEntryId);
@@ -20,10 +29,14 @@ export function useLyricsCoordinator(): void {
     const store = useLyricsStore.getState();
     store.startLoading(currentSongId, generation);
 
-    void provider
-      .getLyrics(currentSongId, controller.signal)
+    const request = lyricsProvider
+      ? lyricsProvider.getLyrics(lyricsSongId ?? currentSongId, controller.signal)
+      : Promise.reject(new Error('The track provider is unavailable.'));
+    void request
       .then((document) => {
         if (controller.signal.aborted) return;
+        if (document && document.songId !== currentSongId)
+          document = { ...document, songId: currentSongId };
         useLyricsStore.getState().setDocument(currentSongId, document, generation);
         if (isNativeRuntime) {
           void getYaqmcClient()
@@ -39,5 +52,5 @@ export function useLyricsCoordinator(): void {
       });
 
     return () => controller.abort();
-  }, [currentSongId, currentQueueEntryId, sessionId, provider, t]);
+  }, [currentSongId, currentQueueEntryId, sessionId, lyricsProvider, lyricsSongId, t]);
 }

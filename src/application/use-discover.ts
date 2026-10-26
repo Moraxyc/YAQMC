@@ -25,6 +25,7 @@ export function useDiscover(): DiscoverState {
     void provider
       .getDiscover(controller.signal)
       .then((discover) => {
+        if (controller.signal.aborted) return;
         setState({ status: 'ready', discover, message: null });
       })
       .catch((error: unknown) => {
@@ -39,6 +40,7 @@ export function useDiscover(): DiscoverState {
     void provider
       .getDiscover(controller.signal, true)
       .then((discover) => {
+        if (controller.signal.aborted) return;
         setState((current) => (current.status === 'ready' ? { ...current, discover } : current));
       })
       .catch(() => {

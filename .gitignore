@@ -23,6 +23,8 @@ GPT-Read-me.md
 
 # Rust
 /target/
+# Machine-local dependency overrides; never ship sibling checkout paths.
+/.cargo/config.toml
 examples/plugins/provider-catalog-rust/target/
 examples/plugins/provider-catalog-rust/component/provider.wasm
 examples/plugins/provider-platform-rust/target/
@@ -52,6 +54,22 @@ release-android/
 artifacts/perf-baseline.md
 artifacts/soak-last.json
 artifacts/acc03-windows-last.json
+
+# Audit, provenance review and release-gate records stay on the maintainer machine.
+/audit-reports/
+/.agent-briefs/
+/*-report.md
+/AUDIT_REPORT*.md
+/audit-report*.md
+/PROVENANCE.md
+/docs/migration/provenance-audit.md
+/docs/release/provenance-ledger.json
+/docs/release/provenance.md
+/docs/release/provider-component-v3.json
+/docs/release/provider-component-v3.md
+/docs/release/provider-readiness.json
+/docs/release/provider-readiness.md
+/docs/release/qm-api-rs-provenance.md
 
 # Example plugin entrypoints (root `dist/` would hide plug01 fixtures)
 !examples/plugins/script-network/dist/

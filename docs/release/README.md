@@ -1,25 +1,21 @@
-# Release and compliance records
+# Release requirements
 
-This directory contains the small set of records required to review and
-reproduce a YAQMC release. It is not a project diary or a migration archive.
+Audit reports, source-provenance reviews and release-gate records remain on the
+maintainer's machine. They are ignored by Git and must not be committed or pushed,
+including through earlier unpublished commits. Public release instructions and
+the license and copyright records remain in the repository.
 
-- [Provider readiness](provider-readiness.md) documents the production QQ Music
-  provider boundary, the exact dependency pin, and its current soak status.
-- [Provider Component v3 automatic closure](provider-component-v3.md) records
-  the reproducible P4-P6 implementation result and links its machine-readable
-  [evidence](provider-component-v3.json). It explicitly does not authorize a
-  release while the provider soak remains open.
-- [YAQMC provenance](provenance.md) explains the in-tree provenance gate and
-  links its machine-readable [ledger](provenance-ledger.json).
-- [qm-api-rs provenance](qm-api-rs-provenance.md) records the separately
-  reviewed linked dependency.
-- [Licensing consent record](licensing-consent-record.json) mirrors the
-  maintainer approvals described in [LICENSING_CONSENT.md](../../LICENSING_CONSENT.md).
+The existing provenance, provider-readiness and corresponding-source checks
+remain mandatory. Their private input files keep their local `docs/release/`
+paths. A checkout without those inputs must stop at the gates; absence does not
+grant approval or waive a soak. Public release assembly remains blocked until
+private evidence can be validated without adding the reports to Git or published
+source archives.
 
-The release workflow packages the exact YAQMC, `qm-api-rs`, and AMLL revisions as
-corresponding-source archives. See
-[CORRESPONDING_SOURCE_POLICY.md](../../CORRESPONDING_SOURCE_POLICY.md) and
-[CI documentation](../ci.md) for commands and artifact rules.
-
-Electron packages include the AGPL-licensed AMLL dependency. Assembly verifies its exact preferred-source archive,
-package manifests, license, revision, and hash before a draft can be created.
+- [Licensing consent](../../LICENSING_CONSENT.md) and its machine-readable
+  [consent record](licensing-consent-record.json) preserve the recorded approvals.
+- [Third-party notices](../../THIRD_PARTY_NOTICES.md) preserve applicable copyright
+  statements and license notices.
+- [Corresponding-source policy](../../CORRESPONDING_SOURCE_POLICY.md) specifies the
+  exact source and license set required for a binary distribution.
+- [CI documentation](../ci.md) describes the build and packaging commands.

@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -33,6 +34,8 @@ import {
 import { useLyricsTransportDefinition } from '../../application/use-lyrics-transport';
 import type { LyricsTransportSurface } from '../../application/lyrics-transport';
 import { widgetBoxStyle } from '../../application/lyrics-scene-geometry';
+import { sceneForOrientation } from '../../application/lyrics-scene-layout';
+import { isAndroidRuntime } from '../../application/host-capabilities';
 import { usePlayerStore } from '../../application/player-store';
 import { coverInk } from './coverInk';
 import { LyricsTransportControls } from '../LyricsTransportControls';
@@ -61,10 +64,6 @@ type SceneStyle = CSSProperties & {
 
 function cssPx(value: number): string {
   return `${Number(value.toFixed(2))}px`;
-}
-
-function readSceneHeightPx(node: HTMLElement): number {
-  return node.clientHeight || node.getBoundingClientRect().height || 0;
 }
 
 function SceneWidget({
@@ -180,7 +179,7 @@ export function LyricsScene({
 }) {
   const { t: settings } = useTranslation('settings', { keyPrefix: 'lyricsPresets' });
   const root = useRef<HTMLDivElement>(null);
-  const [sceneHeight, setSceneHeight] = useState(0);
+  const [sceneSize, setSceneSize] = useState({ width: 0, height: 0 });
   const [palette, setPalette] = useState<ArtworkPalette | null>(null);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [extraUrls, setExtraUrls] = useState<Record<string, string>>({});
@@ -191,17 +190,28 @@ export function LyricsScene({
   const runtimePlaying = usePlayerStore((state) => state.isPlaying);
   const runtimeScrubbing = usePlayerStore((state) => state.isScrubbing);
   const runtimeTimelineRevision = usePlayerStore((state) => state.timelineRevision);
-  const scene = preset.scene;
+  const portrait = sceneSize.width > 0 && sceneSize.height > sceneSize.width;
+  const scene = useMemo(
+    () => (editor ? preset.scene : sceneForOrientation(preset, portrait)),
+    [editor, preset, portrait],
+  );
+  const customLayout = portrait && Boolean(preset.portraitScene);
+  const adaptivePortrait = portrait && !isAndroidRuntime();
+  const compactLayout = compact && !customLayout && !adaptivePortrait;
   // The editor and desktop retain preset geometry. A compact runtime reuses the
   // same widgets in normal grid flow, so metadata cannot cover the transport.
   const boxStyle = (box: Parameters<typeof widgetBoxStyle>[0]): CSSProperties =>
-    compact && !editor ? { zIndex: box.zIndex } : widgetBoxStyle(box);
+    compactLayout && !editor ? { zIndex: box.zIndex } : widgetBoxStyle(box);
   const { durationMs, getPositionMs } = bindings;
   const transportDefinition = useLyricsTransportDefinition(transportSurface);
   const scenePositionMs = editor ? bindings.positionMs : bindings.getPositionMs();
   const sceneProgress =
     bindings.durationMs === 0 ? 0 : (scenePositionMs / Math.max(bindings.durationMs, 1)) * 100;
-  const primaryFontPx = resolvePrimaryFontSizePx(preset.typography.fontScale, sceneHeight);
+  const primaryFontPx = resolvePrimaryFontSizePx(
+    preset.typography.fontScale,
+    sceneSize.height,
+    sceneSize.width * scene.lyrics.width,
+  );
   const secondaryFontPx = resolveSecondaryFontSizePx(primaryFontPx);
   // A user-selected solid background is the actual lyric backdrop; otherwise
   // the artwork palette is the best stable proxy before image pixels are drawn.
@@ -217,14 +227,28 @@ export function LyricsScene({
     const node = root.current;
     if (!node) return;
     const update = () => {
-      const next = readSceneHeightPx(node);
-      setSceneHeight((current) => (current === next ? current : next));
+      const bounds = node.getBoundingClientRect();
+      const width = node.clientWidth || bounds.width || 0;
+      const height = node.clientHeight || bounds.height || 0;
+      setSceneSize((current) =>
+        current.width === width && current.height === height ? current : { width, height },
+      );
     };
     update();
     if (typeof ResizeObserver !== 'function') return;
-    const observer = new ResizeObserver(update);
+    let frame: number | null = null;
+    const observer = new ResizeObserver(() => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        update();
+      });
+    });
     observer.observe(node);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
   }, [previewFrame, layoutKey]);
 
   useEffect(
@@ -364,12 +388,15 @@ export function LyricsScene({
       data-scene-plugin-state={pluginState || undefined}
       data-playback-state={editor ? (bindings.isPlaying ? 'playing' : 'paused') : undefined}
       data-mode={mode}
+      data-orientation={portrait ? 'portrait' : 'landscape'}
+      data-custom-layout={customLayout || undefined}
+      data-adaptive-portrait={adaptivePortrait || undefined}
       data-cover-layout={preset.layout}
       data-background-mode={appearance.mode}
       data-image-fit={appearance.imageFit}
       data-preview-frame={previewFrame}
       data-song-id={bindings.songId ?? undefined}
-      data-compact={compact || undefined}
+      data-compact={compactLayout || undefined}
       style={style}
       onPointerDown={(event) => {
         if (!editor || !onSelectWidget) return;
@@ -494,10 +521,14 @@ export function LyricsScene({
           style={{ ...boxStyle(scene.metadata), textAlign: scene.metadata.align }}
         >
           <div className="lyrics-scene__metadata" data-align={scene.metadata.align}>
-            <strong style={compact ? undefined : { fontSize: `${scene.metadata.titleScale}em` }}>
+            <strong
+              style={compactLayout ? undefined : { fontSize: `${scene.metadata.titleScale}em` }}
+            >
               {bindings.title}
             </strong>
-            <span style={compact ? undefined : { fontSize: `${scene.metadata.artistScale}em` }}>
+            <span
+              style={compactLayout ? undefined : { fontSize: `${scene.metadata.artistScale}em` }}
+            >
               {bindings.artistLabel}
             </span>
           </div>
@@ -513,7 +544,7 @@ export function LyricsScene({
           onEditorDragStart={onEditorDragStart}
           style={{
             ...boxStyle(scene.lyrics),
-            ...(compact ? {} : { fontSize: cssPx(primaryFontPx) }),
+            ...(compactLayout ? {} : { fontSize: cssPx(primaryFontPx) }),
           }}
         >
           <LyricsViewport
@@ -527,6 +558,7 @@ export function LyricsScene({
             translation={bindings.translation}
             romanization={bindings.romanization}
             wordEffect={bindings.wordEffect}
+            wordAnimation={scene.lyrics.wordAnimation}
             amll={bindings.amll}
             followAnchor={scene.lyrics.followAnchor}
             align={scene.lyrics.align}

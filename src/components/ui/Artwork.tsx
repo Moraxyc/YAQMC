@@ -1,7 +1,8 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useContext, type CSSProperties, type ReactNode } from 'react';
 import type { Artwork as ArtworkModel } from '../../domain/music';
 import { resolveArtworkSource, type ArtworkPurpose } from '../../application/artwork-resolver';
 import { useSafeArtworkSource } from '../../application/artwork-source';
+import { ProviderContext, type ActiveProviderSelection } from '../../application/provider-context';
 
 interface ArtworkProps {
   artwork: ArtworkModel;
@@ -9,6 +10,7 @@ interface ArtworkProps {
   loading?: 'eager' | 'lazy';
   purpose?: ArtworkPurpose;
   fallback?: ReactNode;
+  provider?: ActiveProviderSelection;
 }
 
 export function Artwork({
@@ -17,9 +19,15 @@ export function Artwork({
   loading = 'lazy',
   purpose = 'medium',
   fallback,
+  provider,
 }: ArtworkProps) {
+  const active = useContext(ProviderContext);
   const requested = resolveArtworkSource(artwork, purpose);
-  const source = useSafeArtworkSource(requested, { pendingRemote: 'hide' });
+  const source = useSafeArtworkSource(requested, {
+    pendingRemote: 'hide',
+    provider:
+      provider ?? (active ? { providerId: active.id, profileId: active.profileId } : undefined),
+  });
 
   return (
     <span

@@ -67,6 +67,8 @@ pub const CORE_DISPATCH_METHODS: &[&str] = &[
     "provider_artist_catalog",
     "provider_playlist",
     "provider_lyrics",
+    "provider_comments",
+    "provider_comments_cancel",
     "provider_recommendation_next",
     "provider_cache_artwork",
     "provider_set_preferred_quality",
@@ -91,6 +93,8 @@ pub const CORE_DISPATCH_METHODS: &[&str] = &[
     "provider_auth_refresh",
     "provider_sign_out",
     "provider_cache_stats",
+    "app_cache_stats",
+    "app_clear_cache",
     "provider_clear_cache",
     "qqmusic_status",
     "qqmusic_home",
@@ -324,6 +328,24 @@ fn default_qqmusic_profile() -> ProviderProfileKey {
         .expect("the built-in QQ Music default profile key is valid")
 }
 
+fn comment_read<'a>(
+    core: &'a CoreHandle,
+    params: &Value,
+    scope: &ProviderProfileKey,
+    origin: WindowOrigin,
+) -> Result<super::comment_requests::ReadGuard<'a>, DispatchError> {
+    let request_id = match params.get("requestId") {
+        None => None,
+        Some(Value::String(id)) => Some(id.as_str()),
+        _ => {
+            return Err(DispatchError::InvalidParams(
+                "invalid comment request ID".into(),
+            ))
+        }
+    };
+    provider_command(core.comment_requests.begin(scope, origin, request_id))
+}
+
 fn parse_provider<T: DeserializeOwned>(
     core: &CoreHandle,
     params: &Value,
@@ -508,7 +530,7 @@ pub async fn dispatch(
             limit: spec.request_cap,
         });
     }
-    let result = invoke_core(core, host, method_name, params).await?;
+    let result = invoke_core(core, host, origin, method_name, params).await?;
     let response_len = payload_len(&result);
     if !spec.accepts_response_bytes(response_len) {
         return Err(DispatchError::PayloadTooLarge {
@@ -523,6 +545,7 @@ pub async fn dispatch(
 async fn invoke_core(
     core: &CoreHandle,
     host: &dyn HostDispatchHooks,
+    origin: WindowOrigin,
     method_name: &str,
     params: Value,
 ) -> Result<Value, DispatchError> {
@@ -762,7 +785,45 @@ async fn invoke_core(
                 &provider_id,
                 require_lyrics_provider_for_profile
             );
-            provider(lyrics.lyrics_for_song(id).await)
+            let scope = provider_scope(core, &params)?;
+            let read = comment_read(core, &params, &scope, origin)?;
+            provider(tokio::select! {
+                biased;
+                _ = read.token.cancelled() => Err(ProviderCommandError::adapter("lyric read cancelled")),
+                result = lyrics.lyrics_for_song(id) => result,
+            })
+        }
+        "provider_comments" => {
+            let ProviderNamedRequest::<yaqmc_provider_api::SongCommentsRequest> {
+                provider_id,
+                request,
+                ..
+            } = parse_provider(core, &params)?;
+            let comments = require_provider_for_scope!(
+                core,
+                &params,
+                &provider_id,
+                require_comments_provider_for_profile
+            );
+            if let Err(error) = request.validate() {
+                return provider::<yaqmc_provider_api::SongCommentsPage>(Err(error));
+            }
+            let scope = provider_scope(core, &params)?;
+            let read = comment_read(core, &params, &scope, origin)?;
+            provider(
+                comments
+                    .song_comments_with_cancellation(request, read.token.clone())
+                    .await
+                    .and_then(|page| page.bounded()),
+            )
+        }
+        "provider_comments_cancel" => {
+            let scope = provider_scope(core, &params)?;
+            let id = params
+                .get("requestId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| DispatchError::InvalidParams("missing comment request ID".into()))?;
+            provider(core.comment_requests.cancel(&scope, origin, id))
         }
         "provider_recommendation_next" => {
             let ProviderNamedRequest::<yaqmc_provider_api::RecommendationRequest> {
@@ -1194,6 +1255,8 @@ async fn invoke_core(
             );
             provider(catalog.catalog_cache_stats())
         }
+        "app_cache_stats" => cmd(ops::app_cache_stats(core, false)),
+        "app_clear_cache" => cmd(ops::app_cache_stats(core, true)),
         "provider_clear_cache" => {
             let ProviderIdParams { provider_id, .. } = parse_provider(core, &params)?;
             let catalog = require_provider_for_scope!(
@@ -1254,7 +1317,13 @@ async fn invoke_core(
         }
         "qqmusic_lyrics" => {
             let SongIdParams { song_id } = parse(&params)?;
-            provider(core.qq_music().lyrics(song_id).await)
+            let read = comment_read(core, &params, &default_qqmusic_profile(), origin)?;
+            let lyrics = core.qq_music();
+            provider(tokio::select! {
+                biased;
+                _ = read.token.cancelled() => Err(ProviderCommandError::adapter("lyric read cancelled")),
+                result = lyrics.lyrics(song_id) => result,
+            })
         }
         "catalog_share_song" => {
             let ShareSongParams {
@@ -1873,6 +1942,7 @@ async fn invoke_core(
                 provider_id,
                 attempt_id,
                 callback_url,
+                browser_session_cookies,
                 ..
             } = parse_provider(core, &params)?;
             let profile = provider_scope(core, &params)?;
@@ -1884,10 +1954,20 @@ async fn invoke_core(
                 &provider_id,
                 require_account_provider_for_profile
             );
-            let result = capability
-                .provider_account()
-                .complete_oauth_login(&attempt_id, callback_url)
-                .await;
+            let result = match browser_session_cookies {
+                Some(cookies) => {
+                    capability
+                        .provider_account()
+                        .complete_browser_session_login(&attempt_id, callback_url, cookies)
+                        .await
+                }
+                None => {
+                    capability
+                        .provider_account()
+                        .complete_oauth_login(&attempt_id, callback_url)
+                        .await
+                }
+            };
             core.continuation()
                 .validate_account_generation_for_profile(&profile)
                 .await;

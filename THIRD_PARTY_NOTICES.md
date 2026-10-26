@@ -1,7 +1,7 @@
 # Third-party notices
 
 YAQMC's production QMC/mflac decryptor delegates to the pinned `qm-api-rs`
-revision `75f6e4d392f6d3e64608fb48e2480fb0087009e3`, which independently
+revision `bab630d44901f80cae47dd0f09314950d0028e23`, which independently
 adapts cipher behavior from the MIT-licensed project below. Upstream files were
 not vendored. Protocol-only research references, including GPL/LGPL and
 unlicensed repositories, are recorded in
@@ -22,6 +22,18 @@ described in [docs/lyrics.md](docs/lyrics.md#amll-decision).
 `mzj3920/qqmusic-decrypt`, AynaLivePlayer/miaosic, and official QQ Music Electron ASAR contents are **not**
 in-tree YAQMC sources. The `mzj3920` and ASAR claims were removed from the current pinned `qm-api-rs` revision;
 miaosic was protocol corroboration only.
+
+## OpenCC JavaScript
+
+Source: <https://github.com/nk2028/opencc-js>
+
+Package: `opencc-js` `1.4.2`
+
+The JavaScript conversion engine is MIT-licensed (Copyright (c) 2020-2021 The nk2028 Project).
+Its generated dictionaries derive from `opencc-data` and use Apache License 2.0. YAQMC loads the
+unmodified Simplified-to-Traditional Chinese converter locally when Traditional Chinese lyrics are selected.
+Distributions must retain the package's `LICENSE`, `LICENSES/Apache-2.0.txt`, and
+`THIRD_PARTY_LICENSES.md`, including the corresponding upstream notices.
 
 ## Rust Provider Component examples
 
@@ -82,7 +94,7 @@ SOFTWARE.
 ## quick-xml
 
 Source: <https://github.com/tafia/quick-xml>
-Version: 0.41.0, MIT. Used by host XML utilities.
+Version: `0.41.0`, MIT. Used by the pinned QQ protocol library and host XML utilities.
 
 The MIT License (MIT)
 

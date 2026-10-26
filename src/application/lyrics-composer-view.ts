@@ -25,6 +25,7 @@ export function logicalSceneSize(
   frame: LyricsPreviewFrame,
   windowSize: SceneSize = { width: DESKTOP_SCENE_WIDTH, height: DESKTOP_SCENE_HEIGHT },
 ): SceneSize {
+  if (frame === 'portrait') return { width: 1080, height: 1920 };
   if (frame === 'ultrawide') {
     return { width: ULTRAWIDE_SCENE_WIDTH, height: DESKTOP_SCENE_HEIGHT };
   }

@@ -112,7 +112,7 @@ export function ExplorePage({ onNavigate }: ExplorePageProps) {
       <header className="page-heading">
         <p className="eyebrow">{t('eyebrow')}</p>
         <h1>{t('title')}</h1>
-        <p>{t('subtitle')}</p>
+        <p>{t('subtitle', { provider: provider.displayName })}</p>
       </header>
 
       {state.status === 'loading' && <p className="discover-status">{t('loading')}</p>}

@@ -221,6 +221,18 @@ pub enum PlaybackSourceError {
     DecoderUnsupported,
     #[error("the active account is not entitled to this track or quality")]
     EntitlementInsufficient,
+    #[error("this track requires a music membership")]
+    MembershipRequired,
+    #[error("this track requires a separate purchase")]
+    PurchaseRequired,
+    #[error("this track is restricted by the platform's licensing")]
+    CopyrightRestricted,
+    #[error("the music plugin does not support this playback operation")]
+    ProviderUnsupported,
+    #[error("the music plugin is unavailable or not configured")]
+    ProviderUnavailable,
+    #[error("the music plugin failed to resolve a valid playback source")]
+    ProviderFailure,
     #[error("the active account entitlement could not be confirmed")]
     EntitlementUnknown,
     #[error("the provider session expired")]

@@ -5,7 +5,26 @@
 This document records the compatibility surface validated on 2026-08-12. It is an engineering record, not a
 claim that the endpoints below are a supported public SDK contract.
 
-## Official versus compatibility surface
+## Protocol ownership (2026-10-25)
+
+QQ endpoint selection, request parameters, wire response aliases and time units
+belong to `qm-api-rs`. YAQMC calls typed APIs for catalog, login, account reads and
+writes, recommendations, comments, playback files and lyric syntax. Production
+provider code must not call generic CGI or `raw_*` methods; the AST boundary test
+counts those calls and QQ module literals, including code in unknown cfg branches.
+
+The current migration moves song comments/replies, current-profile decoding,
+playlist metadata aliases, write acknowledgement classification, media filename
+and CDN contracts, lyric payload encoding and XML/QRC/LRC syntax into the library.
+YAQMC retains safe-read reconciliation, credential staging, cache policy, quality
+selection, companion-lyric alignment and provider-neutral DTO mapping. The injected
+reqwest transports keep the host's security policy without selecting QQ endpoints.
+
+`account::WriteOutcome::Unknown` remains an instruction to reconcile with a safe
+read; it never enables automatic write retries. The new playback lyric parser
+preserves absolute word times, line IDs and the renderer document schema.
+
+## Official versus compatibility surface (reference ledger)
 
 Tencent's public [Open Platform](https://open.tencent.com/) did not expose a general QQ Music catalog/playback API
 for this desktop use case. Tencent Cloud's published music material is a separate commercial product rather than a

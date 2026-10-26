@@ -1,5 +1,6 @@
 //! Protocol method dispatch over the P1 Core service graph.
 
+pub(crate) mod comment_requests;
 mod events;
 mod methods;
 pub mod ops;

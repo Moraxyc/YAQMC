@@ -22,7 +22,7 @@ import type {
 
 interface SearchPageProps {
   initialQuery?: string;
-  feed: HomeFeed;
+  feed?: HomeFeed | null;
   onNavigate: (route: AppRoute) => void;
 }
 
@@ -145,7 +145,13 @@ export function SearchPage({ initialQuery = '', feed, onNavigate }: SearchPagePr
           <header className="search-page__intro">
             <p className="eyebrow">{t('introEyebrow')}</p>
             <h1>{t('introTitle')}</h1>
-            <p>{provider.id === 'qqmusic' ? t('introQq') : t('introOffline')}</p>
+            <p>
+              {provider.id === 'qqmusic'
+                ? t('introQq')
+                : provider.id === 'fake'
+                  ? t('introOffline')
+                  : t('introPlatform', { provider: provider.displayName })}
+            </p>
           </header>
           <section className="content-section content-section--last">
             <div className="section-heading">
@@ -153,7 +159,7 @@ export function SearchPage({ initialQuery = '', feed, onNavigate }: SearchPagePr
                 <h2>{t('browsePlaylists')}</h2>
               </div>
             </div>
-            {feed.madeForYou.length > 0 ? (
+            {feed && feed.madeForYou.length > 0 ? (
               <div className="media-grid media-grid--four">
                 {feed.madeForYou.map((playlist) => (
                   <MediaCard

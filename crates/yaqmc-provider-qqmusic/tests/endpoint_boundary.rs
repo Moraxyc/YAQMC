@@ -26,11 +26,13 @@ const MARKERS: &[&str] = &[
     "musics.fcg",
     "fcg_query_lyric",
     "y.qq.com",
+    "music.globalComment.",
+    "userInfo.BaseUserInfoServer",
 ];
 // Finite counts: file, overlapping literal markers, low-level request calls.
 const EXPECTED: &[(&str, usize, usize)] = &[
     ("qmapi/transport.rs", 25, 2),
-    ("qqmusic/auth.rs", 4, 3),
+    ("qqmusic/auth.rs", 0, 3),
     ("qqmusic/oauth.rs", 7, 0),
     ("qqmusic/transport.rs", 12, 3),
     ("qqmusic/transport/qmapi_bridge.rs", 0, 2),
@@ -133,18 +135,22 @@ struct Counts {
     requests: usize,
 }
 fn request_like(name: &str) -> bool {
-    matches!(
-        name,
-        "request_http"
-            | "request_http_raw"
-            | "request_http_bytes"
-            | "request_cgi"
-            | "request_cgi_batch"
-            | "send_json"
-            | "musicu_request"
-            | "send"
-            | "execute"
-    )
+    name.starts_with("raw_")
+        || matches!(
+            name,
+            "request_http"
+                | "cgi"
+                | "cgi_typed"
+                | "cgi_batch"
+                | "request_http_raw"
+                | "request_http_bytes"
+                | "request_cgi"
+                | "request_cgi_batch"
+                | "send_json"
+                | "musicu_request"
+                | "send"
+                | "execute"
+        )
 }
 struct Scan {
     root: PathBuf,
@@ -431,6 +437,12 @@ fn sample(source: &str) -> Counts {
     let mut scan = Scan::new(Path::new("fixture"));
     scan.visit_file(&syn::parse_file(source).unwrap());
     *scan.current()
+}
+
+#[test]
+fn direct_cgi_and_raw_api_calls_are_counted() {
+    assert_eq!(sample(r#"fn production(c:C) { c.cgi(module, method, params); c.raw_get_user_base_info(params, credential); c.raw_future_endpoint(params); }"#).requests, 3);
+    assert_eq!(sample(r#"const COMMENT_MODULE:&str="music.globalComment.CommentRead"; const PROFILE_MODULE:&str="userInfo.BaseUserInfoServer";"#).literals, 2);
 }
 #[test]
 fn test_modules_do_not_hide_following_production_or_raw_literals() {

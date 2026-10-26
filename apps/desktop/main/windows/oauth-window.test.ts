@@ -301,6 +301,21 @@ describe('oauth allowlist globs', () => {
     expect(isOAuthCallbackUrl('not a URL', CALLBACK_PREFIX)).toBe(false);
     expect(isOAuthCallbackUrl(callback, 'not a URL')).toBe(false);
     expect(urlMatchesOAuthAllowlist(callback, allowlist)).toBe(true);
+
+    const spotifyCallback = 'http://127.0.0.1:43821/oauth/spotify/callback';
+    expect(isOAuthCallbackUrl(`${spotifyCallback}?code=abc&state=1`, spotifyCallback)).toBe(true);
+    expect(
+      isOAuthCallbackUrl(
+        'http://localhost:43821/oauth/spotify/callback?code=abc&state=1',
+        spotifyCallback,
+      ),
+    ).toBe(false);
+    expect(
+      isOAuthCallbackUrl(
+        'http://127.0.0.1.evil.test:43821/oauth/spotify/callback?code=abc&state=1',
+        spotifyCallback,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -320,7 +335,7 @@ describe('provider-scoped oauth lifecycle', () => {
   it('binds the ephemeral partition and Core calls to provider and attempt IDs', async () => {
     const window = mockWindow();
     const harness = providerDepsFor(window);
-    await openProviderOAuthWindow(
+    const authorization = await openProviderOAuthWindow(
       { providerId: 'plugin.example', methodId: 'browser-oauth' },
       harness.deps,
     );
@@ -347,6 +362,7 @@ describe('provider-scoped oauth lifecycle', () => {
         callbackUrl: callback,
       }),
     );
+    await expect(authorization.completion).resolves.toEqual({ ok: true });
     expect(harness.cancel).not.toHaveBeenCalled();
   });
 
@@ -429,6 +445,20 @@ describe('oauth navigation and lifecycle', () => {
     expect(harness.complete).not.toHaveBeenCalled();
   });
 
+  it('cancels and rejects completion when the initial page load fails', async () => {
+    const window = mockWindow();
+    const loadError = new Error('oauth page failed to load');
+    window.loadURL = vi.fn(() => Promise.reject(loadError));
+    const harness = depsFor(window);
+    const authorization = await openOAuthWindow('qq', harness.deps);
+
+    await expect(authorization.completion).rejects.toBe(loadError);
+    await vi.waitFor(() => expect(harness.cancel).toHaveBeenCalledOnce());
+    expect(window.close).toHaveBeenCalledOnce();
+    window.emitClosed();
+    expect(harness.cancel).toHaveBeenCalledOnce();
+  });
+
   it('does not cancel after a callback capture even if closed fires', async () => {
     const window = mockWindow();
     let finishComplete: (() => void) | undefined;
@@ -452,6 +482,65 @@ describe('oauth navigation and lifecycle', () => {
     expect(harness.cancel).not.toHaveBeenCalled();
   });
 
+  it('cancels and rejects provider completion when the initial page load fails', async () => {
+    const window = mockWindow();
+    const loadError = new Error('provider oauth page failed to load');
+    window.loadURL = vi.fn(() => Promise.reject(loadError));
+    const harness = providerDepsFor(window);
+    const authorization = await openProviderOAuthWindow(
+      { providerId: 'plugin.example', methodId: 'browser-oauth' },
+      harness.deps,
+    );
+
+    await expect(authorization.completion).rejects.toBe(loadError);
+    await vi.waitFor(() =>
+      expect(harness.cancel).toHaveBeenCalledWith({
+        providerId: 'plugin.example',
+        attemptId: 'attempt-0',
+      }),
+    );
+    expect(harness.cancel).toHaveBeenCalledOnce();
+    expect(window.close).toHaveBeenCalledOnce();
+    window.emitClosed();
+    expect(harness.cancel).toHaveBeenCalledOnce();
+  });
+
+  it('allows Spotify login redirects and captures only the exact loopback callback', async () => {
+    const window = mockWindow();
+    const harness = providerDepsFor(window);
+    const callback = 'http://127.0.0.1:43821/oauth/spotify/callback';
+    harness.prepare.mockResolvedValue({
+      attemptId: 'spotify-attempt',
+      url: 'https://accounts.spotify.com/authorize?state=fixture',
+      navigationAllowlist: ['https://accounts.spotify.com/**'],
+      callbackMatcher: { urlPrefix: callback },
+    });
+    const authorization = await openProviderOAuthWindow(
+      { providerId: 'org.yaqmc.providers.music.spotify', methodId: 'browser-oauth' },
+      harness.deps,
+    );
+    expect(
+      window.emitRedirect('https://accounts.spotify.com/en/login?continue=authorize')
+        .preventDefault,
+    ).not.toHaveBeenCalled();
+    expect(
+      window.emitNavigate('https://accounts.spotify.com.evil.test/login').preventDefault,
+    ).toHaveBeenCalledOnce();
+    expect(
+      window.emitRedirect(`${callback}/extra?state=fixture&code=test`).preventDefault,
+    ).toHaveBeenCalledOnce();
+    expect(harness.complete).not.toHaveBeenCalled();
+    const callbackUrl = `${callback}?state=fixture&code=test`;
+    expect(window.emitRedirect(callbackUrl).preventDefault).toHaveBeenCalledOnce();
+    await expect(authorization.completion).resolves.toEqual({ ok: true });
+    expect(harness.complete).toHaveBeenCalledWith({
+      providerId: 'org.yaqmc.providers.music.spotify',
+      attemptId: 'spotify-attempt',
+      callbackUrl,
+    });
+    expect(harness.cancel).not.toHaveBeenCalled();
+  });
+
   it('cancels the attempt when window construction fails', async () => {
     const window = mockWindow();
     const harness = depsFor(window, {
@@ -462,6 +551,233 @@ describe('oauth navigation and lifecycle', () => {
     await expect(openOAuthWindow('qq', harness.deps)).rejects.toThrow('no display');
     expect(harness.cancel).toHaveBeenCalledWith({ attemptId: 'attempt-0' });
     expect(harness.complete).not.toHaveBeenCalled();
+  });
+});
+
+describe('provider browser session login', () => {
+  function browserHarness() {
+    const window = mockWindow();
+    const harness = providerDepsFor(window);
+    const listeners = new Set<() => void>();
+    let values: Array<{ name: string; value: string }> = [];
+    const cookies = {
+      get: vi.fn(async (_filter: { url: string }) => values),
+      on: vi.fn((_event: string, listener: () => void) => {
+        listeners.add(listener);
+      }),
+      removeListener: vi.fn((_event: string, listener: () => void) => {
+        listeners.delete(listener);
+      }),
+    };
+    const session = { cookies, clearStorageData: vi.fn(async () => undefined) };
+    harness.fromPartition.mockReturnValue(session);
+    harness.prepare.mockResolvedValue({
+      attemptId: 'browser-attempt',
+      url: 'https://music.163.com/api/sns/authorize?snsType=5',
+      navigationAllowlist: ['https://music.163.com/**', 'https://graph.qq.com/**'],
+      callbackMatcher: { urlPrefix: 'https://music.163.com/back/qq' },
+      browserSession: {
+        url: 'https://music.163.com/',
+        cookieNames: ['MUSIC_U', '__csrf'],
+        requiredCookieNames: ['MUSIC_U'],
+        credentialOrigins: ['https://interfacepc.music.163.com'],
+        format: 'cookie',
+      },
+    });
+    return {
+      ...harness,
+      window,
+      cookies,
+      session,
+      changed(next: typeof values) {
+        values = next;
+        for (const listener of listeners) listener();
+      },
+    };
+  }
+
+  it('lets the official callback run and transfers only named music cookies once', async () => {
+    const harness = browserHarness();
+    const authorization = await openProviderOAuthWindow(
+      { providerId: 'music.netease', methodId: 'qq' },
+      harness.deps,
+    );
+    expect(
+      harness.window.emitRedirect('https://music.163.com/back/qq?code=fixture&state=official')
+        .preventDefault,
+    ).not.toHaveBeenCalled();
+    harness.changed([{ name: '__csrf', value: 'fixture' }]);
+    await vi.waitFor(() =>
+      expect(harness.cookies.get).toHaveBeenCalledWith({ url: 'https://music.163.com/' }),
+    );
+    expect(harness.complete).not.toHaveBeenCalled();
+    harness.changed([
+      { name: 'MUSIC_U', value: 'synthetic' },
+      { name: 'unrelated', value: 'excluded' },
+    ]);
+    await expect(authorization.completion).resolves.toEqual({ ok: true });
+    expect(harness.complete).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'music.netease',
+      attemptId: 'browser-attempt',
+      callbackUrl: 'https://music.163.com/',
+      browserSessionCookies: [{ name: 'MUSIC_U', value: 'synthetic' }],
+    });
+    expect(harness.cancel).not.toHaveBeenCalled();
+    expect(harness.session.clearStorageData).toHaveBeenCalledOnce();
+    expect(harness.cookies.removeListener).toHaveBeenCalledOnce();
+    harness.changed([{ name: 'MUSIC_U', value: 'synthetic' }]);
+    expect(harness.complete).toHaveBeenCalledOnce();
+  });
+
+  it('cancels when the user closes without a music session cookie', async () => {
+    const harness = browserHarness();
+    const authorization = await openProviderOAuthWindow(
+      { providerId: 'music.netease', methodId: 'wechat' },
+      harness.deps,
+    );
+    harness.window.emitClosed();
+    await expect(authorization.completion).resolves.toEqual({ ok: true });
+    expect(harness.cancel).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'music.netease',
+      attemptId: 'browser-attempt',
+    });
+    expect(harness.complete).not.toHaveBeenCalled();
+    expect(harness.session.clearStorageData).toHaveBeenCalledOnce();
+  });
+
+  it('upgrades allowlisted KuGou redirects to HTTPS and blocks unlisted origins', async () => {
+    const harness = browserHarness();
+    const prepared = await harness.prepare();
+    harness.prepare.mockResolvedValue({
+      ...prepared,
+      url: 'https://openplat-user.kugou.com/qq/?appid=1014',
+      navigationAllowlist: [
+        'https://openplat-user.kugou.com/**',
+        'https://cross.kugou.com/**',
+        'https://graph.qq.com/**',
+      ],
+      callbackMatcher: { urlPrefix: 'https://openplat-user.kugou.com/qq_callback' },
+      browserSession: {
+        ...prepared.browserSession!,
+        url: 'https://openplat-user.kugou.com/',
+        cookieNames: ['KuGoo'],
+        requiredCookieNames: ['KuGoo'],
+        format: 'kugou-web',
+      },
+    });
+    const authorization = await openProviderOAuthWindow(
+      { providerId: 'music.kugou', methodId: 'qq' },
+      harness.deps,
+    );
+    const url = 'http://openplat-user.kugou.com/qq_callback?code=fixture';
+    expect(harness.window.emitRedirect(url).preventDefault).toHaveBeenCalledOnce();
+    await vi.waitFor(() =>
+      expect(harness.window.loadURL).toHaveBeenLastCalledWith(url.replace('http:', 'https:')),
+    );
+    const handoff = 'http://cross.kugou.com/callmsg/?data=synthetic';
+    expect(harness.window.emitRedirect(handoff).preventDefault).toHaveBeenCalledOnce();
+    await vi.waitFor(() =>
+      expect(harness.window.loadURL).toHaveBeenLastCalledWith(handoff.replace('http:', 'https:')),
+    );
+    const count = vi.mocked(harness.window.loadURL).mock.calls.length;
+    expect(
+      harness.window.emitRedirect('http://cross.kugou.com.evil.test/callmsg/?data=synthetic')
+        .preventDefault,
+    ).toHaveBeenCalledOnce();
+    expect(harness.window.loadURL).toHaveBeenCalledTimes(count);
+    harness.window.emitClosed();
+    await authorization.completion;
+  });
+
+  it.each(['http:', 'https:'])(
+    'reports KuGou mobile-login rejection over %s instead of a blank page',
+    async (protocol) => {
+      const harness = browserHarness();
+      const prepared = await harness.prepare();
+      harness.prepare.mockResolvedValue({
+        ...prepared,
+        url: 'https://openplat-user.kugou.com/qq/?appid=1014',
+        navigationAllowlist: ['https://openplat-user.kugou.com/**', 'https://cross.kugou.com/**'],
+        callbackMatcher: { urlPrefix: 'https://openplat-user.kugou.com/qq_callback' },
+        browserSession: {
+          ...prepared.browserSession!,
+          url: 'https://openplat-user.kugou.com/',
+          cookieNames: ['KuGoo'],
+          requiredCookieNames: ['KuGoo'],
+          format: 'kugou-web',
+        },
+      });
+      const authorization = await openProviderOAuthWindow(
+        { providerId: 'music.kugou', methodId: 'qq' },
+        harness.deps,
+      );
+      expect(
+        harness.window.emitRedirect(
+          `${protocol}//cross.kugou.com/callmsg/?errcode=20002&msg=untrusted`,
+        ).preventDefault,
+      ).toHaveBeenCalledOnce();
+      await expect(authorization.completion).rejects.toThrow(
+        '酷狗要求使用酷狗 App 扫码登录（20002）',
+      );
+      expect(harness.complete).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(harness.cancel).toHaveBeenCalledOnce());
+      expect(harness.session.clearStorageData).toHaveBeenCalledOnce();
+      expect(harness.window.close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('keeps the HTTPS replacement alive when the cancelled original load rejects', async () => {
+    const harness = browserHarness();
+    let rejectInitial!: (error: unknown) => void;
+    vi.mocked(harness.window.loadURL).mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectInitial = reject;
+        }),
+    );
+    const authorization = await openProviderOAuthWindow(
+      { providerId: 'music.netease', methodId: 'qq' },
+      harness.deps,
+    );
+    harness.window.emitRedirect('http://music.163.com/back/qq?code=fixture');
+    rejectInitial(Object.assign(new Error('cancelled original navigation'), { errno: -2 }));
+    await vi.waitFor(() =>
+      expect(harness.window.loadURL).toHaveBeenLastCalledWith(
+        'https://music.163.com/back/qq?code=fixture',
+      ),
+    );
+    expect(harness.cancel).not.toHaveBeenCalled();
+    harness.changed([{ name: 'MUSIC_U', value: 'synthetic' }]);
+    await expect(authorization.completion).resolves.toEqual({ ok: true });
+    expect(harness.complete).toHaveBeenCalledOnce();
+  });
+
+  it('still reports a failed HTTPS replacement and cancels the attempt', async () => {
+    const harness = browserHarness();
+    const failure = Object.assign(new Error('replacement failed'), { errno: -2 });
+    vi.mocked(harness.window.loadURL)
+      .mockImplementationOnce(() => new Promise<void>(() => undefined))
+      .mockRejectedValueOnce(failure);
+    const authorization = await openProviderOAuthWindow(
+      { providerId: 'music.netease', methodId: 'qq' },
+      harness.deps,
+    );
+    harness.window.emitRedirect('http://music.163.com/back/qq?code=fixture');
+    await expect(authorization.completion).rejects.toBe(failure);
+    expect(harness.cancel).toHaveBeenCalledOnce();
+  });
+
+  it('rejects cookie-store failures and clears the temporary session', async () => {
+    const harness = browserHarness();
+    const authorization = await openProviderOAuthWindow(
+      { providerId: 'music.netease', methodId: 'qq' },
+      harness.deps,
+    );
+    harness.cookies.get.mockRejectedValue(new Error('cookie store unavailable'));
+    harness.changed([]);
+    await expect(authorization.completion).rejects.toThrow('cookie store unavailable');
+    expect(harness.cancel).toHaveBeenCalledOnce();
+    expect(harness.session.clearStorageData).toHaveBeenCalledOnce();
   });
 });
 

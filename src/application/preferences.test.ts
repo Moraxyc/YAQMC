@@ -82,6 +82,8 @@ describe('preference persistence model', () => {
     });
     expect(normalized.locale).toBe('zh-CN');
     expect(normalized.lyrics).toEqual({
+      commentDanmaku: true,
+      chineseScript: 'original',
       translation: 'hide',
       romanization: 'show',
       timingOffsetMs: -320,
@@ -116,6 +118,31 @@ describe('preference persistence model', () => {
     expect(
       normalizePreferences({ version: 2, lyrics: { wordEffect: 'unknown' } }).lyrics.wordEffect,
     ).toBe('jump');
+  });
+
+  it('validates Chinese script and migrates independent surface secondary sizes', () => {
+    const normalized = normalizePreferences({
+      version: 2,
+      lyrics: { chineseScript: 'traditional' },
+      surfaces: {
+        desktop: { fontSize: 40 },
+        island: { fontSize: 20, secondaryFontSize: 18 },
+      },
+    });
+    expect(normalized.lyrics.chineseScript).toBe('traditional');
+    expect(normalized.surfaces.desktop.secondaryFontSize).toBe(20.8);
+    expect(normalized.surfaces.island.secondaryFontSize).toBe(18);
+    const invalid = normalizePreferences({
+      lyrics: { chineseScript: 'invalid' },
+      surfaces: { desktop: { secondaryFontSize: 200 }, island: { secondaryFontSize: -1 } },
+    });
+    expect(invalid.lyrics.chineseScript).toBe('original');
+    expect(invalid.surfaces.desktop.secondaryFontSize).toBe(48);
+    expect(invalid.surfaces.island.secondaryFontSize).toBe(8);
+    expect(
+      normalizePreferences({ surfaces: { island: { fontSize: 64 } } }).surfaces.island
+        .secondaryFontSize,
+    ).toBe(24);
   });
 
   it('defaults and validates the global lyrics font weight', () => {

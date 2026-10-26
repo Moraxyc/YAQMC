@@ -9,7 +9,7 @@ import {
   Unlock,
   X,
 } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   closeLyricsSurface,
@@ -27,6 +27,8 @@ import {
   type SurfaceKind,
 } from '../application/preferences';
 import { wordProgress } from '../application/lyrics-timing';
+import { presentLyricLine } from '../application/lyrics-text';
+import { useLyricTextScript } from '../application/use-lyric-text-script';
 import { shouldShowLyricSecondary } from '../application/lyrics-presentation';
 import {
   visibleSurfaceInteractionState,
@@ -108,6 +110,7 @@ type SurfaceStyle = CSSProperties & {
   '--surface-lyric-secondary': string;
   '--surface-window-opacity': string;
   '--surface-font-size': string;
+  '--surface-secondary-font-size': string;
   '--surface-font-family': string;
   '--surface-text-align': string;
 };
@@ -188,43 +191,76 @@ function useSurfaceHover(interactive: boolean, rootRef: { current: HTMLElement |
 
 function SurfaceWord({
   word,
-  state,
+  clockRevision,
   projection,
   documentOffsetMs,
   presentationOffsetMs,
+  jump,
 }: {
   word: LyricWord;
-  state: 'future' | 'current' | 'complete';
+  clockRevision: number;
   projection: TimedProjection;
   documentOffsetMs: number;
   presentationOffsetMs: number;
+  jump: boolean;
 }) {
   const element = useRef<HTMLSpanElement>(null);
   useEffect(() => {
-    if (state !== 'current') {
-      freezePercentageClock(element.current, '--word-progress', state === 'complete' ? 1 : 0);
-      return;
-    }
+    let animation: Animation | undefined;
     const apply = () => {
+      animation?.cancel();
+      animation = undefined;
+      const node = element.current;
+      if (!node) return;
       const position =
         estimatedSurfacePosition(projection) + presentationOffsetMs - documentOffsetMs;
-      const progress = wordProgress(word, position);
+      const progress = position >= word.endMs ? 1 : wordProgress(word, position);
+      node.dataset.state =
+        progress >= 1 ? 'complete' : position >= word.startMs ? 'current' : 'future';
       const remaining = Math.max(0, word.endMs - position);
-      if (!projection.value.isPlaying || !surfaceVisualActive()) {
-        freezePercentageClock(element.current, '--word-progress', progress);
-        return;
+      const active = surfaceVisualActive();
+      if (node.dataset.state !== 'current' || !projection.value.isPlaying || !active) {
+        freezePercentageClock(node, '--word-progress', progress);
+      } else {
+        drivePercentageClock(
+          node,
+          '--word-progress',
+          progress,
+          remaining,
+          word.endMs - word.startMs,
+        );
       }
-      drivePercentageClock(element.current, '--word-progress', progress, remaining);
+      if (
+        jump &&
+        active &&
+        node.dataset.state === 'current' &&
+        node.animate &&
+        !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      ) {
+        animation = node.animate(
+          [
+            { transform: 'translateY(0)' },
+            { transform: 'translateY(-0.1em)', offset: 0.35 },
+            { transform: 'translateY(0)' },
+          ],
+          { duration: Math.max(1, word.endMs - word.startMs), easing: 'ease-in-out' },
+        );
+        animation.currentTime = Math.max(0, position - word.startMs);
+        if (!projection.value.isPlaying) animation.pause();
+      }
     };
     apply();
-    return subscribeSurfaceVisualActive(apply);
-  }, [documentOffsetMs, presentationOffsetMs, projection, state, word]);
+    const stopVisual = subscribeSurfaceVisualActive(apply);
+    return () => {
+      stopVisual();
+      animation?.cancel();
+    };
+  }, [clockRevision, documentOffsetMs, jump, presentationOffsetMs, projection, word]);
   return (
     <span
       ref={element}
       className="surface-word"
-      data-state={state}
-      style={{ '--word-progress': state === 'complete' ? '100%' : '0%' } as CSSProperties}
+      style={{ '--word-progress': '0%' } as CSSProperties}
     >
       <span>{word.text}</span>
       <span aria-hidden="true">{word.text}</span>
@@ -233,7 +269,7 @@ function SurfaceWord({
 }
 
 function SurfaceLine({
-  line,
+  line: sourceLine,
   wordIndex,
   projection,
   active,
@@ -246,21 +282,27 @@ function SurfaceLine({
   document: LyricDocument | null;
 }) {
   const lyrics = usePreferencesStore((state) => state.lyrics);
+  const chineseScript = useLyricTextScript();
+  const line = useMemo(
+    () => presentLyricLine(sourceLine, chineseScript),
+    [chineseScript, sourceLine],
+  );
   const primary =
     active && projection && document?.syncMode === 'word' && line.words.length > 0
       ? line.words.map((word, index) => (
           <SurfaceWord
             key={`${word.startMs}-${index}`}
             word={word}
-            state={index < wordIndex ? 'complete' : index === wordIndex ? 'current' : 'future'}
+            clockRevision={wordIndex}
             projection={projection}
             documentOffsetMs={document.metadata.offsetMs}
             presentationOffsetMs={lyrics.timingOffsetMs}
+            jump={lyrics.wordEffect === 'jump'}
           />
         ))
       : line.text;
   return (
-    <span className="lyrics-surface__line" data-active={active || undefined}>
+    <span key={line.id} className="lyrics-surface__line" data-active={active || undefined}>
       <span className="lyrics-surface__primary">{primary}</span>
       {shouldShowLyricSecondary(
         lyrics.romanization,
@@ -412,6 +454,18 @@ export function IslandSurface(props: SurfaceProps) {
   );
   const duration = projection?.value.playbackDurationMs ?? track?.durationMs ?? 0;
   const line = current ?? projection?.value.currentLine ?? null;
+  const translation = usePreferencesStore((state) => state.lyrics.translation);
+  const romanization = usePreferencesStore((state) => state.lyrics.romanization);
+  const secondaryLines = line
+    ? Number(shouldShowLyricSecondary(translation, line.translation, line.text, 'translation')) +
+      Number(shouldShowLyricSecondary(romanization, line.romanization, line.text, 'romanization'))
+    : 0;
+  const idleHeight = Math.max(
+    64,
+    Math.ceil(
+      settings.fontSize * 1.37 + secondaryLines * (settings.secondaryFontSize * 1.25 + 1) + 18,
+    ),
+  );
   const progressRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -453,7 +507,10 @@ export function IslandSurface(props: SurfaceProps) {
       onPointerMove={hover.onPointerMove}
       onPointerLeave={hover.onPointerLeave}
     >
-      <div className="island-card">
+      <div
+        className="island-card"
+        style={{ '--island-idle-height': `${idleHeight}px` } as CSSProperties}
+      >
         <span className="island-card__artwork" aria-hidden="true">
           {artworkSource && (
             <img src={artworkSource} alt="" draggable={false} referrerPolicy="no-referrer" />
@@ -517,6 +574,7 @@ export function LyricsSurfaceApp({ kind }: { kind: SurfaceKind }) {
     '--surface-lyric-secondary': settings.secondaryColor,
     '--surface-window-opacity': String(settings.backgroundOpacity / 100),
     '--surface-font-size': `${settings.fontSize}px`,
+    '--surface-secondary-font-size': `${settings.secondaryFontSize}px`,
     '--surface-font-family': fontFamily(settings),
     '--surface-text-align': settings.alignment,
   } as SurfaceStyle;

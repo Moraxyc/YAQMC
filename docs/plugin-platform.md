@@ -10,6 +10,8 @@ read/control events, safe UI slots, optional scoped HTTPS through a Host proxy, 
 unsigned music-provider plugins as WebAssembly Components hosted by Wasmtime. Existing v1 and v2 plugins continue to
 work unchanged.
 
+Provider components can also supply read-only song comments through `provider.comments`; YAQMC owns the comment drawer and lyrics overlay. See [Song comments](song-comments.md).
+
 ## Package shapes
 
 ```text
@@ -35,7 +37,9 @@ Enable and disable are reversible without restarting YAQMC. The active version i
 not used. API v3 private KV, managed cache, and credential-handle indexes use hashed namespaces, and Components never
 receive their host paths.
 
-Enabling preserves existing permission grants. If a disabled plugin requests sensitive permissions that have not
+Enabling preserves existing permission grants. Install and re-enable reviews offer Select all sensitive permissions
+and Clear all sensitive permissions. These only change the pending selection, preserve ordinary grants, and still
+require the final Install or Enable action. If a disabled plugin requests sensitive permissions that have not
 been approved, the manager requires explicit review before activation; cancelling keeps it disabled. Safe Mode
 blocks activation. Reload failures are shown in the manager, and open details refresh after a successful reload.
 

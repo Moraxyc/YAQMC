@@ -1,9 +1,7 @@
-//! Row L: library lyric fetch/decrypt mapped through in-tree parsers (wire freeze).
-//!
-//! In non-test builds, `QQMusicClient::lyrics` calls library `get_lyric`
-//! directly and maps the result here.
-//! Library `lyric_parser` is not the wire document.
+//! Library lyric fetch/decrypt, text decoding and syntax parsing mapped into
+//! the stable application lyric document. Companion alignment remains host policy.
 
+#[cfg(test)]
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use qqmusic_api::models::lyric::GetLyricResponse;
 use yaqmc_provider_api::LyricDocument;
@@ -31,62 +29,8 @@ pub(crate) fn lyric_document_from_qmapi(
     Some(document)
 }
 
-fn lyric_text(mid: &str, field: &'static str, value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if let Some(decoded) = decode_base64_lyric(value) {
-        tracing::debug!(
-            target: "qqmusic.lyric",
-            mid,
-            field,
-            encoded_length = value.len(),
-            decoded_length = decoded.len(),
-            "decoded base64 lyric payload"
-        );
-        return Some(decoded);
-    }
-    if let Some(encoding) = opaque_lyric_encoding(value) {
-        tracing::warn!(
-            target: "qqmusic.lyric",
-            mid,
-            field,
-            encoding,
-            payload_length = value.len(),
-            "discarded opaque lyric payload instead of displaying it as plain text"
-        );
-        return None;
-    }
-    Some(value.to_owned())
-}
-
-fn decode_base64_lyric(value: &str) -> Option<String> {
-    let decoded = STANDARD.decode(value).ok()?;
-    let decoded = String::from_utf8(decoded).ok()?;
-    is_structured_lyric(&decoded).then_some(decoded)
-}
-
-fn is_structured_lyric(value: &str) -> bool {
-    let value = value.trim_start();
-    value.starts_with('[') || value.starts_with("<QrcInfos")
-}
-
-fn opaque_lyric_encoding(value: &str) -> Option<&'static str> {
-    if value.len() < 64 || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
-        return None;
-    }
-    if value.len().is_multiple_of(2) && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Some("hex");
-    }
-    if value.len().is_multiple_of(4)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
-    {
-        return Some("base64");
-    }
-    None
+fn lyric_text(_mid: &str, _field: &'static str, value: &str) -> Option<String> {
+    qqmusic_api::models::lyric::decode_lyric_text(value)
 }
 
 pub(crate) async fn fetch_lyric_document(mid: &str) -> Result<Option<LyricDocument>, QQMusicError> {
@@ -160,15 +104,13 @@ mod tests {
     }
 
     #[test]
-    fn library_qrc_parser_is_not_the_wire_document() {
+    fn library_playback_qrc_parser_preserves_absolute_word_timing() {
         let raw = "[0,2000]Fixture(0,900) lyric(900,1100)";
-        let library = qqmusic_api::lyric_parser::QrcLyric::parse(raw);
-        let intree = parse_qrc_document("TRACK", raw).expect("intree parse");
-        assert_eq!(intree.lines[0].words[1].start_ms, 900);
-        assert_ne!(
-            library.lines[0].words[1].start_ms as u64, intree.lines[0].words[1].start_ms,
-            "library parser treats (dur_cs) not (start,duration); keep in-tree mapping"
-        );
+        let library = qqmusic_api::lyric_parser::parse_playback_qrc(raw).unwrap();
+        let mapped = parse_qrc_document("TRACK", raw).unwrap();
+        assert_eq!(library.lines[0].words[1].start_ms, 900);
+        assert_eq!(mapped.lines[0].words[1].start_ms, 900);
+        assert_eq!(mapped.lines[0].words[1].end_ms, 2000);
     }
 
     #[test]

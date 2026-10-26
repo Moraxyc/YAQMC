@@ -12,6 +12,7 @@ import { Artwork } from '../components/ui/Artwork';
 import { ActionMenu, ActionMenuItem } from '../components/ui/ActionMenu';
 import { IconButton } from '../components/ui/IconButton';
 import { SongShareMenuItems } from '../components/SongShareActions';
+import { CommentsButton } from '../components/CommentsPanel';
 
 export function SongPage({ song }: { song: Song }) {
   const { t } = useTranslation('pages', { keyPrefix: 'song' });
@@ -42,6 +43,7 @@ export function SongPage({ song }: { song: Song }) {
       >
         <Artwork
           artwork={song.artwork}
+          provider={song.provider}
           className="detail-hero__art"
           loading="eager"
           purpose="large"
@@ -70,6 +72,7 @@ export function SongPage({ song }: { song: Song }) {
             {t('quality', { quality: song.quality })}
           </p>
           <div className="detail-hero__actions">
+            <CommentsButton song={song} />
             <button
               type="button"
               className="button button--primary"

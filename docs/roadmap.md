@@ -18,7 +18,7 @@ are met.
 
 Checked items have passed their automatic implementation gates. They do not imply release readiness,
 production-account, GUI, LIVE, packaging, or final maintainer acceptance. The exact-pin three-day provider soak is
-still `not-started`; see [Provider Component v3 automatic closure](release/provider-component-v3.md).
+still `not-started`; see [release requirements](release/README.md).
 
 ## 1. Goals and non-goals
 
@@ -459,7 +459,7 @@ Exit: end-to-end examples, cross-provider queues, account isolation, circuit bre
 - The implementer reports automated results and unexecuted HUMAN/LIVE items first. The maintainer then decides whether
   to authorize real-account, GUI, LIVE, packaging, and final HUMAN acceptance.
 
-Automatic closure evidence: [Provider Component v3](release/provider-component-v3.md). Release readiness remains
+Automatic closure evidence: [release requirements](release/README.md). Release readiness remains
 blocked by the exact-pin three-day provider soak; no GUI, LIVE, real-account, packaging, or HUMAN result is implied.
 
 ## 11. Test and quality gates

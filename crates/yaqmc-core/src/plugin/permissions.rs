@@ -2,6 +2,8 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use thiserror::Error;
 
+pub const LOCAL_BACKEND_ORIGIN: &str = "http://127.0.0.1:43821";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PluginPermission {
     TrackRead,
@@ -21,6 +23,7 @@ pub enum PluginPermission {
     ProviderPlayback,
     ProviderRecommendation,
     ProviderLyrics,
+    ProviderComments,
     ProviderAccount,
 }
 
@@ -50,6 +53,7 @@ pub const V3_PERMISSIONS: &[PluginPermission] = &[
     PluginPermission::ProviderPlayback,
     PluginPermission::ProviderRecommendation,
     PluginPermission::ProviderLyrics,
+    PluginPermission::ProviderComments,
     PluginPermission::ProviderAccount,
 ];
 
@@ -92,6 +96,7 @@ impl PluginPermission {
             Self::ProviderPlayback => "provider.playback",
             Self::ProviderRecommendation => "provider.recommendation",
             Self::ProviderLyrics => "provider.lyrics",
+            Self::ProviderComments => "provider.comments",
             Self::ProviderAccount => "provider.account",
         }
     }
@@ -116,6 +121,7 @@ impl PluginPermission {
             Self::ProviderPlayback => "Resolve playable sources",
             Self::ProviderRecommendation => "Provide recommendations",
             Self::ProviderLyrics => "Provide lyrics",
+            Self::ProviderComments => "Provide song comments",
             Self::ProviderAccount => "Manage this provider instance account",
         }
     }
@@ -141,7 +147,7 @@ pub fn parse_permission(
     value: &str,
 ) -> Result<(PluginPermission, Option<String>), PermissionError> {
     if let Some(origin) = value.strip_prefix("network:") {
-        let origin = parse_https_origin(origin)?;
+        let origin = parse_network_origin(origin)?;
         return Ok((PluginPermission::Network, Some(origin)));
     }
     if RESERVED
@@ -160,6 +166,13 @@ pub fn parse_permission(
         }
     }
     Err(PermissionError::Unknown)
+}
+
+fn parse_network_origin(value: &str) -> Result<String, PermissionError> {
+    if value == LOCAL_BACKEND_ORIGIN {
+        return Ok(LOCAL_BACKEND_ORIGIN.to_owned());
+    }
+    parse_https_origin(value)
 }
 
 pub fn permission_allowed_for_api(permission: PluginPermission, api_version: u32) -> bool {
@@ -291,6 +304,7 @@ mod tests {
         );
         assert!(parse_permission("network:*").is_err());
         assert!(parse_permission("network:https://*").is_err());
+        assert!(parse_permission("network:https://*.example.com").is_err());
         assert!(parse_permission("network:https://127.0.0.1").is_err());
         assert!(parse_permission("network:https://localhost").is_err());
         assert!(parse_permission("network:http://api.example.com").is_err());
@@ -299,6 +313,22 @@ mod tests {
         assert!(is_blocked_ip("10.0.0.1".parse().unwrap()));
         assert!(is_blocked_ip("169.254.169.254".parse().unwrap()));
         assert!(!is_blocked_ip("1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn only_the_declared_loopback_backend_origin_is_allowed() {
+        assert_eq!(
+            parse_permission("network:http://127.0.0.1:43821").unwrap(),
+            (
+                PluginPermission::Network,
+                Some(LOCAL_BACKEND_ORIGIN.to_owned())
+            )
+        );
+        assert!(parse_permission("network:http://127.0.0.1").is_err());
+        assert!(parse_permission("network:http://127.0.0.1:43822").is_err());
+        assert!(parse_permission("network:http://localhost:43821").is_err());
+        assert!(parse_permission("network:http://10.0.0.1:43821").is_err());
+        assert!(parse_permission("network:http://127.0.0.2:43821").is_err());
     }
 
     #[test]

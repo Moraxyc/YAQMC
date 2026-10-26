@@ -1,6 +1,7 @@
 import type { LyricDocument, LyricLine } from '../domain/music';
 import { shouldShowLyricSecondary } from './lyrics-presentation';
-import type { SecondaryLyricVisibility } from './preferences';
+import type { LyricDisplaySettings, SecondaryLyricVisibility } from './preferences';
+import { presentLyricLine } from './lyrics-text';
 
 export interface RenderLyricWord {
   startTimeMs: number;
@@ -44,10 +45,12 @@ export function buildLyricsRenderModel(
   document: LyricDocument,
   translation: SecondaryLyricVisibility,
   romanization: SecondaryLyricVisibility,
+  chineseScript: LyricDisplaySettings['chineseScript'] = 'original',
 ): LyricsRenderModel {
   const lines: RenderLyricLine[] = [];
 
-  for (const [sourceLineIndex, sourceLine] of document.lines.entries()) {
+  for (const [sourceLineIndex, originalLine] of document.lines.entries()) {
+    const sourceLine = presentLyricLine(originalLine, chineseScript);
     if (sourceLine.startMs === null || !Number.isFinite(sourceLine.startMs)) continue;
     const endMs = finiteLineEnd(sourceLine);
     if (endMs === null) continue;

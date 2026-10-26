@@ -11,6 +11,13 @@ import type { MethodName, MethodResult } from '../protocol/methods';
 
 export interface ElectronRendererApi {
   invoke(method: string, params?: unknown): Promise<unknown>;
+  invokeResult?(
+    method: string,
+    params?: unknown,
+  ): Promise<
+    | { ok: true; result: unknown }
+    | { ok: false; error: { code: string; message: string; retryable: boolean; details?: unknown } }
+  >;
   on(channel: string, callback: (payload: unknown) => void): () => void;
   window?: HostWindowBridge;
   shell?: HostShellBridge;
@@ -72,7 +79,19 @@ export function createElectronBridge(
         }) as Promise<string | null>,
       pickFile: (options) => api.invoke('dialog.pickFile', options) as Promise<string | null>,
     },
-    invoke: (method, ...params) => invokeThrough(api.invoke.bind(api), method, params),
+    invoke: (method, ...params) =>
+      invokeThrough(
+        async (name, ...payload: [unknown?]) => {
+          if (!api.invokeResult) return api.invoke(name, ...payload);
+          const reply = await api.invokeResult(name, ...payload);
+          if (!reply.ok) {
+            throw Object.assign(new Error(reply.error.message), reply.error);
+          }
+          return reply.result;
+        },
+        method,
+        params,
+      ),
     listen: (channel, handler) => api.on(channel, handler as (payload: unknown) => void),
   };
 }

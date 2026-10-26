@@ -55,6 +55,33 @@ export async function nativeProviderRequest<T>(
   throwIfAborted(signal);
   try {
     const client = getYaqmcClient();
+    if (
+      ['provider_comments', 'provider_lyrics', 'qqmusic_lyrics'].includes(command) &&
+      signal &&
+      args
+    ) {
+      const requestId = crypto.randomUUID();
+      let onAbort!: () => void;
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        onAbort = () => {
+          reject(abortError());
+          void client
+            .invoke('provider_comments_cancel', {
+              providerId: (args.providerId as string | undefined) ?? 'qqmusic',
+              profileId: args.profileId as string | undefined,
+              requestId,
+            })
+            .catch(() => undefined);
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+      try {
+        const result = client.invoke(command, { ...args, requestId } as never);
+        return (await Promise.race([result, cancelled])) as T;
+      } finally {
+        signal.removeEventListener('abort', onAbort);
+      }
+    }
     const result = (await (args === undefined
       ? client.invoke(command)
       : client.invoke(command, args as never))) as T;

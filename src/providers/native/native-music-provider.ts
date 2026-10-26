@@ -41,6 +41,7 @@ export class NativeMusicProvider implements MusicProvider {
   readonly id: string;
   readonly profileId: string;
   readonly displayName: string;
+  readonly getComments?: MusicProvider['getComments'];
 
   constructor(
     readonly descriptor: ProviderDescriptor,
@@ -49,6 +50,10 @@ export class NativeMusicProvider implements MusicProvider {
     this.id = descriptor.providerId;
     this.profileId = parseProfileId(profileId);
     this.displayName = descriptor.displayName;
+    if (descriptor.capabilities.comments) {
+      this.getComments = (request, signal) =>
+        this.request('provider_comments', { request }, signal);
+    }
   }
 
   protected request<T>(

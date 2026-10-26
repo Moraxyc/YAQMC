@@ -202,6 +202,12 @@ const METHODS: &[MethodSpec] = &[
     ),
     spec("provider_playlist", MethodOwner::Core, OriginClass::Main),
     spec("provider_lyrics", MethodOwner::Core, OriginClass::Main),
+    spec("provider_comments", MethodOwner::Core, OriginClass::Main),
+    spec(
+        "provider_comments_cancel",
+        MethodOwner::Core,
+        OriginClass::Main,
+    ),
     spec(
         "provider_recommendation_next",
         MethodOwner::Core,
@@ -311,6 +317,8 @@ const METHODS: &[MethodSpec] = &[
     ),
     spec("provider_sign_out", MethodOwner::Core, OriginClass::Main),
     spec("provider_cache_stats", MethodOwner::Core, OriginClass::Main),
+    spec("app_cache_stats", MethodOwner::Core, OriginClass::Main),
+    spec("app_clear_cache", MethodOwner::Core, OriginClass::Main),
     spec("provider_clear_cache", MethodOwner::Core, OriginClass::Main),
     spec("qqmusic_status", MethodOwner::Core, OriginClass::Main),
     spec("qqmusic_home", MethodOwner::Core, OriginClass::Main),

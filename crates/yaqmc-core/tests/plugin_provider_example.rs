@@ -250,10 +250,36 @@ async fn complete_platform_component_exercises_capabilities_and_lifecycle() {
         .expect("login methods");
     assert_eq!(methods.len(), 1);
     assert_eq!(methods[0].id, "example");
+    let rejected = account
+        .account_prepare_login("example")
+        .await
+        .expect("prepare rejected attempt");
+    let state = reqwest::Url::parse(&rejected.url)
+        .unwrap()
+        .query_pairs()
+        .find(|(name, _)| name == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let wrong_path = reqwest::Url::parse(&format!(
+        "{}/extra?code=fixture&state={state}",
+        rejected.callback_matcher.url_prefix
+    ))
+    .unwrap();
+    assert!(account
+        .provider_account()
+        .complete_oauth_login(&rejected.attempt_id, wrong_path)
+        .await
+        .is_err());
+    assert!(recording.accounts().is_empty());
     let prepared = account
         .account_prepare_login("example")
         .await
         .expect("oauth preparation");
+    assert!(prepared
+        .navigation_allowlist
+        .iter()
+        .any(|rule| rule.ends_with("/**")));
     let authorize_url = reqwest::Url::parse(&prepared.url).expect("authorization URL");
     let state = authorize_url
         .query_pairs()
@@ -336,7 +362,7 @@ async fn complete_platform_component_exercises_capabilities_and_lifecycle() {
     assert!(registry.contains("qqmusic"));
     assert_eq!(
         registry.resolve(&queue[1]).await.unwrap_err(),
-        PlaybackSourceError::TrackUnavailable
+        PlaybackSourceError::ProviderUnavailable
     );
     assert!(old_source
         .read_range(0, 4, tokio_util::sync::CancellationToken::new())

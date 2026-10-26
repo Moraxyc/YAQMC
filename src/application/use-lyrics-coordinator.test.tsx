@@ -5,7 +5,8 @@ import type { LyricDocument, Song } from '../domain/music';
 import type { MusicProvider } from '../providers/music-provider';
 import { useLyricsStore } from './lyrics-store';
 import { initialPlayerState, usePlayerStore } from './player-store';
-import { ProviderContext } from './provider-context';
+import { ProviderContext, ProviderRegistryContext } from './provider-context';
+import { MusicProviderRegistry } from '../providers/provider-registry';
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -69,6 +70,41 @@ describe('useLyricsCoordinator', () => {
   function wrapper({ children }: { children: ReactNode }) {
     return createElement(ProviderContext, { value: provider }, children);
   }
+
+  it('loads lyrics from the playing track provider while browsing another platform', async () => {
+    const origin = {
+      ...provider,
+      id: 'music.netease',
+      profileId: 'work',
+      getLyrics: vi.fn().mockResolvedValue({ ...document, songId: '123' }),
+    };
+    const active = { ...provider, id: 'music.spotify', getLyrics: vi.fn() };
+    const registry = new MusicProviderRegistry(
+      { providerId: active.id, profileId: active.profileId },
+      [origin, active],
+    );
+    usePlayerStore.setState({
+      queue: [
+        {
+          ...track,
+          id: 'routed-song',
+          provider: { providerId: origin.id, profileId: origin.profileId, trackId: '123' },
+        },
+      ],
+    });
+    renderHook(() => useLyricsCoordinator(), {
+      wrapper: ({ children }) =>
+        createElement(
+          ProviderRegistryContext,
+          { value: registry },
+          createElement(ProviderContext, { value: active }, children),
+        ),
+    });
+    await waitFor(() => expect(useLyricsStore.getState().status).toBe('ready'));
+    expect(origin.getLyrics).toHaveBeenCalledWith('123', expect.any(AbortSignal));
+    expect(active.getLyrics).not.toHaveBeenCalled();
+    expect(useLyricsStore.getState().document?.songId).toBe('routed-song');
+  });
 
   beforeEach(() => {
     invoke.mockReset();

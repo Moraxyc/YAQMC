@@ -326,11 +326,41 @@ export interface LyricMetadata {
 }
 
 export interface LyricDocument {
+  comments?: SongComment[];
   songId: EntityId;
   syncMode: LyricSyncMode;
   metadata: LyricMetadata;
   vocalists: LyricVocalist[];
   lines: LyricLine[];
+}
+
+export interface SongComment {
+  id: string;
+  content: string;
+  author: string;
+  likedCount: number;
+  avatarUrl?: string;
+  timeMs?: number;
+  replyCount?: number;
+  replyTo?: { author: string; content: string };
+}
+
+export type CommentSort = 'hot' | 'new';
+
+export interface SongCommentsRequest {
+  songId: string;
+  sort: CommentSort;
+  cursor?: string | null;
+  limit: number;
+  parentId?: string | null;
+}
+
+export interface SongCommentsPage {
+  items: SongComment[];
+  nextCursor: string | null;
+  total: number | null;
+  supportedSorts: CommentSort[];
+  repliesSupported: boolean;
 }
 
 export const PROVIDER_ERROR_CODES = [
@@ -353,6 +383,7 @@ export const PROVIDER_ERROR_CODES = [
   'provider-unavailable',
   'profile-unavailable',
   'unsupported-operation',
+  'comments-limit-exceeded',
   'mutation-in-progress',
   'storage-failure',
   'invalid-playlist-identifier',
@@ -412,7 +443,7 @@ export interface RemotePlayHistoryItem {
   source: 'qqmusic-account' | 'local-playback';
 }
 
-export type EntitlementTier = 'free' | 'green-diamond' | 'super-vip' | 'unknown';
+export type EntitlementTier = 'free' | 'green-diamond' | 'music-vip' | 'super-vip' | 'unknown';
 export type MembershipState = 'active' | 'expired' | 'inactive' | 'unknown';
 
 export type SecondaryEntitlement =
@@ -476,7 +507,7 @@ export type AccountLoginMethod = 'qq' | 'wechat';
 export interface AccountLoginMethodDescriptor {
   id: string;
   label: string;
-  flow: 'oauth';
+  flow: 'oauth' | 'qr';
 }
 
 export type AccountState =
@@ -693,6 +724,7 @@ export interface ProviderStatus {
 }
 
 export interface ProviderCapabilitySummary {
+  comments?: boolean;
   catalog: boolean;
   playback: boolean;
   recommendations: boolean;
@@ -732,6 +764,9 @@ export interface RecommendationBatch {
 }
 
 export interface CacheStats {
+  /** Opaque disposable files managed by the component host, counted once per namespace. */
+  componentBytes?: number;
+  componentEntries?: number;
   totalBytes: number;
   mediaBytes: number;
   artworkBytes: number;
@@ -1261,6 +1296,13 @@ export interface OAuthPrepareResult {
     androidPackages: string[];
   }>;
   callbackMatcher: { urlPrefix: string };
+  browserSession?: {
+    url: string;
+    cookieNames: string[];
+    requiredCookieNames: string[];
+    credentialOrigins: string[];
+    format: 'cookie' | 'kugou-web';
+  };
 }
 
 export type NamedRequest<T> = { request: T };

@@ -26,7 +26,7 @@ import App from './App';
 
 const appCatalog = vi.hoisted(() => ({
   value: {
-    status: 'loading' as 'loading' | 'ready',
+    status: 'loading' as 'loading' | 'ready' | 'error',
     home: null as typeof homeFeed | null,
     library: null as typeof librarySnapshot | null,
     message: null as string | null,
@@ -266,6 +266,52 @@ class ControlledFullscreenPort implements FullscreenPort {
 }
 
 describe('App TopBar history navigation', () => {
+  it.each(['loading', 'error'] as const)(
+    'keeps search usable while the home catalog is %s',
+    async (status) => {
+      appCatalog.value = { status, home: null, library: null, message: 'Home unavailable' };
+      const search = vi.fn().mockImplementation(async (query: string) => ({
+        kind: 'song',
+        query,
+        items: [allSongs[0]!],
+        page: 1,
+        hasMore: false,
+      }));
+      const provider = Object.assign(Object.create(fakeMusicProvider) as MusicProvider, {
+        id: 'plugin.music',
+        displayName: 'Music plugin',
+        search,
+      });
+      renderApp(provider);
+      fireEvent.click(screen.getByRole('button', { name: 'Navigate to search' }));
+      const input = await screen.findByRole('textbox', { name: 'Search music' });
+      expect(screen.getByText('Search the music catalog from Music plugin.')).toBeVisible();
+      fireEvent.change(input, { target: { value: 'sample' } });
+      await waitFor(() =>
+        expect(search).toHaveBeenCalledWith('sample', 'song', expect.any(AbortSignal), 1, 20),
+      );
+      expect(await screen.findByText(allSongs[0]!.title)).toBeVisible();
+      expect(screen.queryByText('Home unavailable')).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(['loading', 'error'] as const)(
+    'loads scoped song details while the home catalog is %s',
+    async (status) => {
+      appCatalog.value = { status, home: null, library: null, message: 'Home unavailable' };
+      const getSong = vi
+        .fn()
+        .mockResolvedValue({ ...allSongs[0]!, id: 'quiet-light', title: 'Independent detail' });
+      const provider = Object.assign(Object.create(fakeMusicProvider) as MusicProvider, {
+        getSong,
+      });
+      renderApp(provider);
+      fireEvent.click(screen.getByRole('button', { name: 'Navigate to song' }));
+      expect(await screen.findByRole('heading', { name: 'Independent detail' })).toBeVisible();
+      expect(getSong).toHaveBeenCalledWith('quiet-light', expect.any(AbortSignal));
+      expect(screen.queryByText('Home unavailable')).not.toBeInTheDocument();
+    },
+  );
   it('keeps the original page inert through entrance and exit, restoring it on close', () => {
     renderApp();
     const shell = document.querySelector('.app-shell');

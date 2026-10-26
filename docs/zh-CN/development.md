@@ -33,9 +33,9 @@ npm run dev
 
 ## 原生提供器 pin
 
-生产提供器无条件链接公开 crate `qqmusic-api`：
+提供器 manifest 无条件声明 crate `qqmusic-api`：
 `https://github.com/YAQMC/qm-api-rs.git`，精确 revision 为
-`75f6e4d392f6d3e64608fb48e2480fb0087009e3`。
+`bab630d44901f80cae47dd0f09314950d0028e23`。
 
 桌面开发启动器为 Cargo 设置 `CARGO_NET_GIT_FETCH_WITH_CLI=true`。访问辅助脚本只核对 manifest pin
 与可选的相邻 checkout，不修改 Git 配置：
@@ -45,6 +45,17 @@ node scripts/ci/qm-api-rs-access.mjs --check
 ```
 
 若存在相邻的 `../qm-api-rs` 检出，该命令还会要求其 HEAD 与生产 pin 完全一致。
+
+### 可选的本地协议开发
+
+库的 `main` 分支包含上文的生产固定提交。使用相邻开发检出时，可选择使用已被 Git 忽略的项目级 `.cargo/config.toml`：
+
+```toml
+[patch."https://github.com/YAQMC/qm-api-rs.git"]
+qqmusic-api = { path = "../qm-api-rs" }
+```
+
+相邻库检出应保持在记录的提交。普通 Cargo 命令会自动使用它，包括 `cargo build -p yaqmc-core --release --locked --offline`，无需额外 `--config` 参数或全局配置。其他检出可直接获取固定的 Git 提交，无需相邻库覆盖。本地覆盖不代替发布时的 Git 来源校验与精确版本浸泡测试。
 
 ## 完整桌面端运行
 

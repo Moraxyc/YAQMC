@@ -299,6 +299,32 @@ export function PluginManager() {
     ? permissionChanges(installedPermissions, inspect.permissions)
     : { added: [], removed: [] };
 
+  const sensitiveGrantsButton = (
+    permissions: string[],
+    selected: string[],
+    change: (grants: string[]) => void,
+  ) => {
+    const sensitive = permissions.filter(isSensitivePermission);
+    if (sensitive.length === 0) return null;
+    const allSelected = sensitive.every((permission) => selected.includes(permission));
+    return (
+      <button
+        type="button"
+        className="button button--quiet"
+        disabled={busy}
+        onClick={() =>
+          change(
+            allSelected
+              ? selected.filter((permission) => !isSensitivePermission(permission))
+              : [...new Set([...selected, ...sensitive])],
+          )
+        }
+      >
+        {t(allSelected ? 'clearSensitive' : 'selectSensitive')}
+      </button>
+    );
+  };
+
   return (
     <div className="plugin-manager">
       {!hasHostCapability('plugins') && (
@@ -322,6 +348,7 @@ export function PluginManager() {
             {t('reviewTitle')} · {enableReview.name}
           </h3>
           <p>{t('enableReviewDescription')}</p>
+          {sensitiveGrantsButton(enableReview.permissions, enableGrants, setEnableGrants)}
           <ul className="plugin-permissions">
             {enableReview.permissions.filter(isSensitivePermission).map((permission) => (
               <li key={permission}>
@@ -517,7 +544,7 @@ export function PluginManager() {
                   <input
                     type="checkbox"
                     checked={grant.includes(permission)}
-                    disabled={!isSensitivePermission(permission)}
+                    disabled={busy || !isSensitivePermission(permission)}
                     onChange={(event) => {
                       setGrant((current) =>
                         event.target.checked
@@ -532,6 +559,7 @@ export function PluginManager() {
               </li>
             ))}
           </ul>
+          {sensitiveGrantsButton(inspect.permissions, grant, setGrant)}
           {reviewDelta.added.length > 0 && (
             <p>
               {t('permissionsAdded')}: {reviewDelta.added.join(', ')}

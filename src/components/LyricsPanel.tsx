@@ -6,7 +6,8 @@ import {
   useState,
   type CSSProperties,
 } from 'react';
-import { ChevronDown, Heart, Image } from 'lucide-react';
+import { ChevronDown, Heart, Image, MessageSquare } from 'lucide-react';
+import { CommentsButton } from './CommentsPanel';
 import { useAccountStore, useFavoriteState } from '../application/account-runtime';
 import { useLyricsStore } from '../application/lyrics-store';
 import {
@@ -50,6 +51,8 @@ import {
 } from './LyricsFullscreenTransport';
 import { LyricsScene } from './lyrics-scene';
 import type { LyricsSceneBindings } from './lyrics-scene';
+import { CommentDanmaku } from './CommentDanmaku';
+import { sceneForOrientation } from '../application/lyrics-scene-layout';
 
 type LyricsStyle = CSSProperties & {
   '--lyrics-color': string;
@@ -95,9 +98,38 @@ function LyricsPanelStage({
 }: LyricsPanelProps & { stageState: LyricsStageState }) {
   noteLyricsPanelCommit();
   const compact = useCompactPlayerLayout(true);
+  const stage = useRef<HTMLElement>(null);
+  const [portrait, setPortrait] = useState(() => window.innerHeight > window.innerWidth);
+  useLayoutEffect(() => {
+    const node = stage.current;
+    if (!node) return;
+    const update = () => {
+      const bounds = node.getBoundingClientRect();
+      const width = node.clientWidth || bounds.width;
+      const height = node.clientHeight || bounds.height;
+      if (width > 0 && height > 0) setPortrait(height > width);
+    };
+    update();
+    if (typeof ResizeObserver !== 'function') return;
+    let frame: number | null = null;
+    const observer = new ResizeObserver(() => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        update();
+      });
+    });
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, []);
   const transportDefinition = useLyricsTransportDefinition(fullscreen ? 'fullscreen' : 'window');
   const floatingTransport = !compact && transportDefinition.id !== BUILTIN_TRANSPORT_WINDOW_ID;
   const { t } = useTranslation('lyrics');
+  const commentDanmaku = usePreferencesStore((state) => state.lyrics.commentDanmaku);
+  const updateLyrics = usePreferencesStore((state) => state.updateLyrics);
   const { t: player } = useTranslation('player');
   const provider = useContext(ProviderContext);
   const accountProvider = provider && isAccountMusicProvider(provider) ? provider : null;
@@ -170,7 +202,8 @@ function LyricsPanelStage({
         : nextPreset.layout === 'vinyl'
           ? t('coverVinyl')
           : t('coverSplit');
-  const backgroundFit = resolvedPreset.background.fit;
+  const activeScene = sceneForOrientation(resolvedPreset, portrait);
+  const backgroundFit = activeScene.background.fit;
   const currentArtworkSrc = currentArtworkBaseSrc
     ? resolveArtworkSource(
         {
@@ -184,9 +217,10 @@ function LyricsPanelStage({
     : '';
   const safeArtworkSource = useSafeArtworkSource(currentArtworkSrc || null, {
     pendingRemote: 'hide',
+    provider: currentProvider,
   });
   useEffect(() => rememberLyricsArtwork(safeArtworkSource), [safeArtworkSource]);
-  const sceneBackground = resolvedPreset.scene.background;
+  const sceneBackground = activeScene.background;
   const appearanceMode =
     backgroundMode === 'image' || backgroundMode === 'color'
       ? backgroundMode
@@ -227,7 +261,6 @@ function LyricsPanelStage({
     blurredBackdrop ?? lyricsBlurredBackdropFallback(),
   );
   const activeDocument = document?.songId === currentTrackId ? document : null;
-  const stage = useRef<HTMLElement>(null);
   const transportRef = useRef<LyricsFullscreenTransportHandle>(null);
 
   const timelineDuration = playbackDurationMs ?? currentDurationMs;
@@ -411,6 +444,7 @@ function LyricsPanelStage({
         hideTransportWidget={floatingTransport}
         layoutKey={`${focus}:${fullscreen}`}
       />
+      <CommentDanmaku key={currentTrackId} document={document} />
 
       <div className="lyrics-stage__topbar" data-hidden={(!compact && controlsHidden) || undefined}>
         <IconButton
@@ -428,6 +462,15 @@ function LyricsPanelStage({
       >
         <IconButton label={t('collapse')} size="large" onClick={onClose}>
           <ChevronDown size={20} />
+        </IconButton>
+        <CommentsButton song={currentTrack ?? null} size="large" />
+        <IconButton
+          label={t('comments.toggleDanmaku')}
+          active={commentDanmaku}
+          size="large"
+          onClick={() => updateLyrics({ commentDanmaku: !commentDanmaku })}
+        >
+          <MessageSquare size={18} />
         </IconButton>
         <IconButton
           label={favoriteLabel}
