@@ -1,4 +1,11 @@
 import type {
+  AppBuildSource,
+  AppPackageKind,
+  AppUpdateCandidate,
+  AppUpdateProgress,
+} from './app-updates';
+import type { PluginUpdateOperation } from './plugin-updates';
+import type {
   LyricDocument,
   LyricSurfaceProjection,
   PlayerSnapshot,
@@ -10,6 +17,7 @@ export const CHANNEL_PLAYER_SNAPSHOT = 'player://snapshot';
 export const CHANNEL_LYRICS_PROJECTION = 'lyrics://projection';
 export const CHANNEL_LYRICS_DOCUMENT = 'lyrics://document';
 export const CHANNEL_PLUGIN_CHANGED = 'plugin://changed';
+export const CHANNEL_PLUGIN_UPDATE_PROGRESS = 'plugin://update-progress';
 export const CHANNEL_PREFERENCES_CHANGED = 'preferences://changed';
 export const CHANNEL_HOST_COMMAND = 'host://command';
 export const CHANNEL_HOST_CORE_STATUS = 'host://core-status';
@@ -28,6 +36,7 @@ export const CORE_EVENT_CHANNELS = [
   CHANNEL_LYRICS_PROJECTION,
   CHANNEL_LYRICS_DOCUMENT,
   CHANNEL_PLUGIN_CHANGED,
+  CHANNEL_PLUGIN_UPDATE_PROGRESS,
   CHANNEL_PREFERENCES_CHANGED,
   CHANNEL_HOST_COMMAND,
   CHANNEL_CORE_LOG,
@@ -58,6 +67,7 @@ export interface ApiEventPayload {
 export interface PluginChangedPayload {
   pluginId: string;
   enabled: boolean;
+  updateOperationId?: string;
 }
 
 export interface PreferencesChangedPayload {
@@ -113,7 +123,14 @@ export type UpdateState =
   | 'not-available'
   | 'error'
   | 'downloading'
-  | 'ready-to-install';
+  | 'ready-to-install'
+  | 'verifying'
+  | 'waiting-to-restart'
+  | 'installing'
+  | 'restarting'
+  | 'completed'
+  | 'cancelled'
+  | 'rolled-back';
 
 export interface UpdatePayload {
   state: UpdateState;
@@ -124,6 +141,16 @@ export interface UpdatePayload {
   releaseUrl?: string;
   releaseNotes?: string;
   error?: string;
+  operationId?: string;
+  currentVersion?: string;
+  buildSource?: AppBuildSource;
+  packageKind?: AppPackageKind;
+  buildCommit?: string;
+  releaseTag?: string;
+  candidate?: AppUpdateCandidate;
+  progress?: AppUpdateProgress;
+  installDisabledReason?: string;
+  canCancel?: boolean;
 }
 
 export interface ChannelPayload {
@@ -132,6 +159,7 @@ export interface ChannelPayload {
   [CHANNEL_LYRICS_PROJECTION]: LyricSurfaceProjection;
   [CHANNEL_LYRICS_DOCUMENT]: LyricDocument;
   [CHANNEL_PLUGIN_CHANGED]: PluginChangedPayload;
+  [CHANNEL_PLUGIN_UPDATE_PROGRESS]: PluginUpdateOperation;
   [CHANNEL_PREFERENCES_CHANGED]: PreferencesChangedPayload;
   [CHANNEL_HOST_COMMAND]: HostCommandPayload;
   [CHANNEL_CORE_LOG]: CoreLogPayload;

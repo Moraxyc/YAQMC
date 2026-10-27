@@ -4,7 +4,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -76,11 +76,23 @@ pub struct ComponentProviderAdapter {
     host: Option<ComponentHostContext>,
     declared: BTreeSet<ProviderCapability>,
     account_generation: AtomicU64,
-    snapshot_revision: AtomicU64,
     epoch_clock: Arc<PlaybackEpochClock>,
     account_cancellation: Mutex<CancellationToken>,
     oauth_attempts: Mutex<HashMap<String, ComponentOAuthAttempt>>,
     last_account_snapshot: Mutex<AccountSnapshot>,
+    update_admission: Arc<tokio::sync::RwLock<()>>,
+    last_activity: Mutex<Option<Instant>>,
+}
+
+struct ProviderCallGuard<'a> {
+    _admission: tokio::sync::RwLockReadGuard<'a, ()>,
+    last_activity: &'a Mutex<Option<Instant>>,
+}
+
+impl Drop for ProviderCallGuard<'_> {
+    fn drop(&mut self) {
+        *self.last_activity.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+    }
 }
 
 impl ComponentProviderAdapter {
@@ -110,6 +122,20 @@ impl ComponentProviderAdapter {
         component_bytes: &[u8],
         host: Option<ComponentHostContext>,
     ) -> Result<Arc<Self>, ComponentProviderError> {
+        Self::from_precompiled(
+            manifest,
+            provider,
+            ProviderComponent::compile(component_bytes)?,
+            host,
+        )
+    }
+
+    pub(crate) fn from_precompiled(
+        manifest: &PluginManifest,
+        provider: &crate::plugin::manifest::ProviderPluginManifest,
+        compiled: crate::plugin::component::CompiledComponent,
+        host: Option<ComponentHostContext>,
+    ) -> Result<Arc<Self>, ComponentProviderError> {
         let declared = provider
             .capabilities
             .iter()
@@ -117,8 +143,8 @@ impl ComponentProviderAdapter {
             .collect::<BTreeSet<_>>();
         let world =
             ProviderWorld::parse(&provider.world).ok_or(ComponentProviderError::MissingProvider)?;
-        let component = ProviderComponent::load_with_host(
-            component_bytes,
+        let component = ProviderComponent::from_compiled(
+            compiled,
             declared.iter().copied(),
             world,
             host.clone(),
@@ -141,11 +167,12 @@ impl ComponentProviderAdapter {
             host,
             declared,
             account_generation: AtomicU64::new(generation),
-            snapshot_revision: AtomicU64::new(0),
             epoch_clock,
             account_cancellation: Mutex::new(CancellationToken::new()),
             oauth_attempts: Mutex::new(HashMap::new()),
             last_account_snapshot: Mutex::new(guest_component_snapshot(&provider_id)),
+            update_admission: Arc::new(tokio::sync::RwLock::new(())),
+            last_activity: Mutex::new(None),
         }))
     }
 
@@ -155,6 +182,59 @@ impl ComponentProviderAdapter {
 
     pub fn component(&self) -> &ProviderComponent {
         &self.component
+    }
+
+    pub(crate) fn update_busy(&self) -> bool {
+        self.update_admission.try_write().is_err() || self.update_session_busy()
+    }
+
+    pub(crate) fn update_session_busy(&self) -> bool {
+        let mut attempts = self.oauth_attempts.lock().unwrap_or_else(|p| p.into_inner());
+        prune_oauth_attempts(&mut attempts);
+        self.component.busy()
+            || !attempts.is_empty()
+            || matches!(
+                self.last_account_snapshot
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .state_name(),
+                "starting-login" | "waiting-for-scan" | "waiting-for-confirmation" | "restoring-session"
+            )
+    }
+
+    pub(crate) fn try_admit_update(&self) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
+        self.update_admission.clone().try_write_owned().ok()
+    }
+
+    pub(crate) fn update_last_activity(&self) -> Option<Instant> {
+        *self.last_activity.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn enter_call(&self) -> ProviderResult<ProviderCallGuard<'_>> {
+        let admission = self
+            .update_admission
+            .try_read()
+            .map_err(|_| ProviderCommandError {
+                code: "provider-updating".into(),
+                message: "the provider is being updated; retry after it restarts".into(),
+                retryable: true,
+            })?;
+        Ok(ProviderCallGuard {
+            _admission: admission,
+            last_activity: &self.last_activity,
+        })
+    }
+
+    pub(crate) fn stop_for_update(&self) {
+        self.oauth_attempts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        self.account_cancellation
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .cancel();
+        self.component.disable();
     }
 
     pub fn registry_capabilities(self: &Arc<Self>) -> ProviderCapabilities {
@@ -198,6 +278,7 @@ impl ComponentProviderAdapter {
         Req: Serialize + ?Sized,
         Response: DeserializeOwned,
     {
+        let _active = self.enter_call()?;
         let mut request = serde_json::to_value(request)
             .map_err(|_| ProviderCommandError::invalid_request("provider request is invalid"))?;
         if let Some(platform) = &self.platform {
@@ -298,11 +379,22 @@ impl ComponentProviderAdapter {
 
     fn sanitize_snapshot(&self, mut snapshot: AccountSnapshot) -> ProviderResult<AccountSnapshot> {
         snapshot = snapshot.validate_scope(&self.provider_id)?;
-        snapshot.revision = self.snapshot_revision.fetch_add(1, Ordering::AcqRel) + 1;
-        *self
+        let mut previous = self
             .last_account_snapshot
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = snapshot.clone();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let generation = self.account_generation.load(Ordering::Acquire);
+        // Snapshots and library pages share one authority revision. Polling an
+        // unchanged account must not invalidate an in-flight library request.
+        let changed = previous.account != snapshot.account
+            || previous.profile_id != snapshot.profile_id
+            || previous.capabilities != snapshot.capabilities;
+        snapshot.revision = if changed && previous.revision == generation {
+            self.advance_account_generation()
+        } else {
+            generation
+        };
+        *previous = snapshot.clone();
         Ok(snapshot)
     }
 
@@ -333,6 +425,7 @@ impl ComponentProviderAdapter {
         &self,
         method_id: &str,
     ) -> ProviderResult<OAuthPrepareResult> {
+        let _active = self.enter_call()?;
         if !valid_account_login_method_id(method_id) {
             return Err(ProviderCommandError::invalid_request(
                 "account login method is invalid",
@@ -432,6 +525,7 @@ impl ComponentProviderAdapter {
         operation: &str,
         request: &Value,
     ) -> Result<ResolvedPlaybackSource, PlaybackSourceError> {
+        let _active = self.enter_call().map_err(map_playback_command_error)?;
         let resolution: ComponentPlaybackResolution = self
             .call_account_scoped(ProviderCapability::Playback, operation, request)
             .await
@@ -1211,6 +1305,7 @@ impl AccountProvider for ComponentProviderAdapter {
     }
 
     async fn account_prepare_login(&self, method_id: &str) -> ProviderResult<OAuthPrepareResult> {
+        let _active = self.enter_call()?;
         let methods = self.account_login_methods().await?;
         let Some(method) = methods.iter().find(|method| method.id == method_id) else {
             return Err(ProviderCommandError::invalid_request(
@@ -1233,6 +1328,13 @@ impl ProviderAccount for ComponentProviderAdapter {
     }
 
     async fn account_snapshot(&self) -> AccountSnapshot {
+        let Ok(_active) = self.enter_call() else {
+            return self
+                .last_account_snapshot
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+        };
         let snapshot = self
             .call_account_scoped(ProviderCapability::Account, "account.snapshot", &json!({}))
             .await
@@ -1251,6 +1353,7 @@ impl ProviderAccount for ComponentProviderAdapter {
     }
 
     async fn refresh_account(&self) -> ProviderResult<AccountSnapshot> {
+        let _active = self.enter_call()?;
         let snapshot = self
             .call_account_scoped(ProviderCapability::Account, "account.snapshot", &json!({}))
             .await?;
@@ -1420,6 +1523,7 @@ impl ProviderAccount for ComponentProviderAdapter {
     }
 
     async fn start_qr_login(&self) -> ProviderResult<AccountSnapshot> {
+        let _active = self.enter_call()?;
         self.advance_account_generation();
         let snapshot = self
             .call_account_scoped(
@@ -1443,6 +1547,7 @@ impl ProviderAccount for ComponentProviderAdapter {
         attempt_id: &str,
         callback_url: reqwest::Url,
     ) -> ProviderResult<AccountSnapshot> {
+        let _active = self.enter_call()?;
         let attempt = {
             let mut attempts = self
                 .oauth_attempts
@@ -1481,6 +1586,7 @@ impl ProviderAccount for ComponentProviderAdapter {
         callback_url: reqwest::Url,
         cookies: Vec<yaqmc_provider_api::BrowserSessionCookie>,
     ) -> ProviderResult<AccountSnapshot> {
+        let _active = self.enter_call()?;
         let attempt = {
             let mut attempts = self
                 .oauth_attempts
@@ -1523,6 +1629,7 @@ impl ProviderAccount for ComponentProviderAdapter {
     }
 
     async fn cancel_oauth_login(&self, attempt_id: &str) -> ProviderResult<AccountSnapshot> {
+        let _active = self.enter_call()?;
         self.oauth_attempts
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1543,6 +1650,7 @@ impl ProviderAccount for ComponentProviderAdapter {
         attempt_id: String,
         owner_lease_id: String,
     ) -> ProviderResult<AccountSnapshot> {
+        let _active = self.enter_call()?;
         let snapshot = self
             .call_account_scoped(
                 ProviderCapability::Account,
@@ -1563,6 +1671,7 @@ impl ProviderAccount for ComponentProviderAdapter {
     }
 
     async fn cancel_qr_login(&self, attempt_id: String) -> ProviderResult<AccountSnapshot> {
+        let _active = self.enter_call()?;
         self.advance_account_generation();
         let snapshot = self
             .call_account_scoped(
@@ -1578,6 +1687,7 @@ impl ProviderAccount for ComponentProviderAdapter {
         &self,
         attempt_id: Option<String>,
     ) -> ProviderResult<AccountSnapshot> {
+        let _active = self.enter_call()?;
         self.advance_account_generation();
         let snapshot = self
             .call_account_scoped(
@@ -1590,6 +1700,9 @@ impl ProviderAccount for ComponentProviderAdapter {
     }
 
     async fn restore_session(&self) {
+        let Ok(_active) = self.enter_call() else {
+            return;
+        };
         self.advance_account_generation();
         let _ = self
             .call_account_scoped::<_, ()>(
@@ -1602,6 +1715,7 @@ impl ProviderAccount for ComponentProviderAdapter {
     }
 
     async fn sign_out(&self) -> ProviderResult<AccountSnapshot> {
+        let _active = self.enter_call()?;
         self.advance_account_generation();
         let snapshot = self
             .call_account_scoped(ProviderCapability::Account, "account.sign-out", &json!({}))
@@ -2584,6 +2698,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_admission_preserves_inflight_calls_and_rejects_new_login_without_cancelling_it() {
+        let adapter = account_adapter(guest_snapshot(9_999));
+        let old_playback = adapter.current_playback_guard();
+        let admitted = adapter.enter_call().expect("admitted call");
+        assert!(adapter.update_busy());
+        assert!(adapter.try_admit_update().is_none());
+        assert!(old_playback.validate().is_ok());
+        drop(admitted);
+
+        let update = adapter.try_admit_update().expect("idle update admission");
+        let generation = adapter.account_generation();
+        assert_eq!(
+            adapter.start_qr_login().await.err().expect("blocked login").code,
+            "provider-updating"
+        );
+        assert_eq!(adapter.account_generation(), generation);
+        assert!(old_playback.validate().is_ok());
+        assert!(adapter.component.enabled());
+        drop(update);
+        assert!(adapter.start_qr_login().await.is_ok());
+    }
+
+    #[tokio::test]
     async fn account_generation_is_host_owned_and_cancels_old_playback_authority() {
         let adapter = account_adapter(guest_snapshot(9_999));
         let capabilities = adapter.registry_capabilities();
@@ -2619,6 +2756,36 @@ mod tests {
         assert_eq!(restored.provider_id, "dev.example.account");
         assert!(restored.revision > 0);
         assert_ne!(restored.revision, 9_999);
+    }
+
+    #[tokio::test]
+    async fn repeated_snapshot_reads_share_library_authority_until_account_changes() {
+        let adapter = account_adapter(guest_snapshot(9_999));
+        let first = adapter.account_snapshot().await;
+        let guard = adapter.current_playback_guard();
+        let second = adapter.account_snapshot().await;
+        assert_eq!(first.revision, second.revision);
+        let page: Page<Song> = adapter
+            .sanitize_page(
+                serde_json::from_value(json!({
+                    "items": [], "nextCursor": null, "total": 0, "fetchedAtMs": 1,
+                    "stale": false, "authRevision": 9_999
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(page.auth_revision, second.revision);
+        assert!(guard.validate().is_ok());
+
+        let mut changed = second;
+        changed.account = AccountState::SessionExpired {
+            profile: None,
+            entitlement: None,
+        };
+        let changed = adapter.sanitize_snapshot(changed).unwrap();
+        assert!(changed.revision > first.revision);
+        assert_eq!(changed.revision, adapter.account_generation());
+        assert_eq!(guard.validate(), Err(PlaybackSourceError::Cancelled));
     }
 
     #[tokio::test]

@@ -433,7 +433,7 @@ export interface AccountPlaylistDetail {
 export interface RemotePlayHistoryItem {
   song: Song;
   playedAtMs: number | null;
-  source: 'qqmusic-account' | 'local-playback';
+  source: 'qqmusic-account' | 'provider-account' | 'local-playback';
 }
 
 export type EntitlementTier = 'free' | 'green-diamond' | 'music-vip' | 'super-vip' | 'unknown';

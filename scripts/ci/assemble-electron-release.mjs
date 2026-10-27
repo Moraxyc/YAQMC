@@ -48,7 +48,7 @@ Windows 更新通道不提供发布者签名验证。Linux 产物也未进行代
 - 不提供 Windows i686（32 位）版本。
 - 应用与密钥环数据命名空间为 \`org.yaqmc.desktop\`。
 - Linux 图形诊断使用 Chromium/Ozone 模式，旧宿主的渲染器覆盖配置不适用。
-- 自动更新元数据（\`latest.yml\`、\`latest-linux.yml\`）仅适用于 **x64**；arm64 请手动下载安装包。
+- 官方 Windows 安装版、便携版与 Linux AppImage 支持应用内更新（x64、arm64）；其他安装方式由原分发渠道更新。
 - 打包前检查 Provider 就绪状态及来源。YAQMC、\`qm-api-rs\` 和 Apple Music-like Lyrics
   的确切对应源码归档见 \`CORRESPONDING-SOURCE-MANIFEST.json\`。
 - 本次构建不代表已完成 A→B 跨版本升级演练。
@@ -66,8 +66,8 @@ Checksums detect corruption; they do not establish an independent publisher iden
 - Windows i686 is not published.
 - App and keyring data stay under \`org.yaqmc.desktop\`.
 - Linux graphics diagnostics use Chromium/Ozone modes; retired-host renderer overrides do not apply.
-- Updater metadata (\`latest.yml\`, \`latest-linux.yml\`) is the **x64** feed only.
-  Arm64 installers may be attached; they are not in the updater channel yet.
+- Official Windows installers, portable EXEs and Linux AppImages support in-app updates on x64 and arm64.
+  Other installation formats use their original distribution channel.
 - Provider readiness and provenance are enforced before packaging. The exact YAQMC,
   \`qm-api-rs\`, and Apple Music-like Lyrics corresponding-source archives are identified by
   \`CORRESPONDING-SOURCE-MANIFEST.json\`.

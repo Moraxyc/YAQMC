@@ -7,9 +7,9 @@ use yaqmc_protocol::{
 };
 
 #[test]
-fn registry_is_the_190_method_single_source_of_truth() {
+fn registry_is_the_207_method_single_source_of_truth() {
     let registry = methods();
-    assert_eq!(registry.len(), 173 + PROTOCOL_ONLY_METHODS.len());
+    assert_eq!(registry.len(), 182 + PROTOCOL_ONLY_METHODS.len());
     let names: HashSet<&str> = registry.iter().map(|spec| spec.name).collect();
     assert_eq!(names.len(), registry.len());
     assert!(method("player_snapshot").is_some());
@@ -33,7 +33,22 @@ fn registry_is_the_190_method_single_source_of_truth() {
     assert!(method("not_a_method").is_none());
     for name in PROTOCOL_ONLY_METHODS {
         assert!(method(name).is_some(), "{name}");
-        assert_eq!(method(name).expect(name).owner, MethodOwner::Core);
+        let owner = if name.starts_with("host_updater_") { MethodOwner::Host } else { MethodOwner::Core };
+        assert_eq!(method(name).expect(name).owner, owner);
+    }
+}
+
+#[test]
+fn application_updater_methods_are_host_owned_and_main_renderer_only() {
+    for name in PROTOCOL_ONLY_METHODS.iter().filter(|name| name.starts_with("host_updater_")) {
+        let spec = method(name).unwrap();
+        assert_eq!(spec.owner, MethodOwner::Host);
+        assert_eq!(spec.allowed_origins, [WindowOrigin::Main]);
+        assert!(authorize(WindowOrigin::Main, name).is_ok());
+        for origin in [WindowOrigin::Host, WindowOrigin::LyricsDesktop, WindowOrigin::LyricsIsland,
+            WindowOrigin::LyricsDesktopUnlock, WindowOrigin::LyricsIslandUnlock] {
+            assert!(authorize(origin, name).is_err());
+        }
     }
 }
 
@@ -60,6 +75,38 @@ fn oauth_launch_details_are_host_only() {
     let start = method("provider_auth_oauth_start").expect("host OAuth start");
     assert_eq!(start.owner, MethodOwner::Host);
     assert!(start.allows(WindowOrigin::Main));
+}
+
+#[test]
+fn plugin_updates_are_only_available_to_host_and_main_window() {
+    for name in [
+        "plugin_update_policy_get",
+        "plugin_update_policy_set",
+        "plugin_update_check",
+        "plugin_update_prepare",
+        "plugin_update_apply",
+        "plugin_update_status",
+        "plugin_update_cancel",
+        "plugin_update_runtime_ready",
+        "plugin_update_editing",
+    ] {
+        let spec = method(name).unwrap();
+        assert_eq!(
+            spec.allowed_origins,
+            [WindowOrigin::Host, WindowOrigin::Main]
+        );
+        for origin in [WindowOrigin::Host, WindowOrigin::Main] {
+            authorize(origin, name).unwrap();
+        }
+        for origin in [
+            WindowOrigin::LyricsDesktop,
+            WindowOrigin::LyricsIsland,
+            WindowOrigin::LyricsDesktopUnlock,
+            WindowOrigin::LyricsIslandUnlock,
+        ] {
+            assert!(authorize(origin, name).is_err());
+        }
+    }
 }
 
 #[test]

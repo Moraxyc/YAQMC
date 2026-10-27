@@ -27,7 +27,9 @@
   },
   "dependencies": {
     "@yaqmc/client": "*",
-    "electron-updater": "6.8.9"
+    "builder-util-runtime": "9.7.0",
+    "electron-updater": "6.8.9",
+    "semver": "7.7.4"
   },
   "devDependencies": {
     "electron": "43.8.3",

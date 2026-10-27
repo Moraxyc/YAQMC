@@ -8,6 +8,7 @@ This directory contains the public user, tester, contributor, and release docume
 
 - Getting started: [Android](android.md), [data locations, upgrades, and uninstall](data-locations.md),
   [appearance](appearance.md), and [Linux runtime](linux.md)
+- [Application updates and release commits](app-updates.md)
 - Browsing and accounts: [authentication](authentication.md), [account library](account-library.md),
   [membership](account-membership.md), [home recommendations](home-recommendations.md), and
   [Discover](discover.md)

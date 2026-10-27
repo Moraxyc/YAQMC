@@ -11,6 +11,7 @@ import {
   oauthWindowTitle,
   openOAuthWindow,
   openProviderOAuthWindow,
+  cancelProviderOAuthWindows,
   providerOAuthPartitionName,
   providerOAuthWindowLabel,
   urlMatchesOAuthAllowlist,
@@ -332,6 +333,33 @@ describe('shared OAuth URL policy contract', () => {
 });
 
 describe('provider-scoped oauth lifecycle', () => {
+  it('closes only the provider being updated and cancels its Core attempt', async () => {
+    const target = mockWindow();
+    const other = mockWindow();
+    const a = providerDepsFor(target);
+    const b = providerDepsFor(other);
+    const active = await openProviderOAuthWindow(
+      { providerId: 'plugin.target', methodId: 'browser-oauth' },
+      a.deps,
+    );
+    const unaffected = await openProviderOAuthWindow(
+      { providerId: 'plugin.other', methodId: 'browser-oauth' },
+      b.deps,
+    );
+    const rejected = expect(active.completion).rejects.toThrow('Plugin update cancelled');
+    cancelProviderOAuthWindows(['plugin.target']);
+    await rejected;
+    expect(target.close).toHaveBeenCalled();
+    expect(other.close).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(a.cancel).toHaveBeenCalledWith({
+        providerId: 'plugin.target',
+        attemptId: 'attempt-0',
+      }),
+    );
+    other.emitClosed();
+    await unaffected.completion;
+  });
   it('binds the ephemeral partition and Core calls to provider and attempt IDs', async () => {
     const window = mockWindow();
     const harness = providerDepsFor(window);

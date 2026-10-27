@@ -1,0 +1,19 @@
+{
+  "source": {
+    "id": "test-source",
+    "pluginId": "dev.example.update",
+    "name": "Test publisher",
+    "repository": "https://example.com/test",
+    "feedUrl": "https://example.com/feed",
+    "keyId": "test-key",
+    "publicKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "downloadOrigins": [
+      "https://example.com"
+    ]
+  },
+  "envelope": {
+    "keyId": "test-key",
+    "payload": "eyJzY2hlbWFWZXJzaW9uIjoxLCJwbHVnaW5JZCI6ImRldi5leGFtcGxlLnVwZGF0ZSIsInNlcXVlbmNlIjoxLCJleHBpcmVzQXRNcyI6NDEwMjQ0NDgwMDAwMCwicmVsZWFzZXMiOlt7ImtleUlkIjoidGVzdC1rZXkiLCJwYXlsb2FkIjoiZXlKd2JIVm5hVzVKWkNJNkltUmxkaTVsZUdGdGNHeGxMblZ3WkdGMFpTSXNJblpsY25OcGIyNGlPaUl4TGpFdU1DSXNJbU5vWVc1dVpXd2lPaUp6ZEdGaWJHVWlMQ0ppZFdsc1pFbGtJam9pZEdWemRDMHhJaXdpY21Wc1pXRnpaVk5sY1hWbGJtTmxJam94TENKemFHRXlOVFlpT2lKaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaElpd2ljMmw2WlNJNk1USXpMQ0oxY213aU9pSm9kSFJ3Y3pvdkwyVjRZVzF3YkdVdVkyOXRMM0JzZFdkcGJpNTVZWEZ0WXkxd2JIVm5hVzRpZlE9PSIsInNpZ25hdHVyZSI6IjJXYXdIRWlsUDFOVnhFVjRyWFQrNFk2d21pSHM3cngxaC80V25XZzVzbUdBZDZNQXJGZUdKMUdlYTFXbXA4a0Jzc1pRME56R0o0Ujd5UHNzZFI5MEF3PT0ifV19",
+    "signature": "Ux29+H31g6E8sYoN2DsMbyDmCuJ7cI/8BmNa57BQZXRjNdgSV26YKXSW4UhAse8YNyx5jLzSoE5ExmzazAM5Dw=="
+  }
+}

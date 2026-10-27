@@ -5,6 +5,7 @@ members = [
     "crates/yaqmc-protocol",
     "crates/yaqmc-provider-api",
     "crates/yaqmc-provider-qqmusic",
+    "crates/yaqmc-update-helper",
 ]
 resolver = "2"
 

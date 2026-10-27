@@ -631,6 +631,35 @@ const METHODS: &[MethodSpec] = &[
         OriginClass::Main,
     ),
     spec("plugin_list", MethodOwner::Core, OriginClass::Main),
+    spec(
+        "plugin_update_policy_get",
+        MethodOwner::Core,
+        OriginClass::Main,
+    ),
+    spec(
+        "plugin_update_policy_set",
+        MethodOwner::Core,
+        OriginClass::Main,
+    ),
+    spec("plugin_update_check", MethodOwner::Core, OriginClass::Main),
+    spec(
+        "plugin_update_prepare",
+        MethodOwner::Core,
+        OriginClass::Main,
+    ),
+    spec("plugin_update_apply", MethodOwner::Core, OriginClass::Main),
+    spec("plugin_update_status", MethodOwner::Core, OriginClass::Main),
+    spec("plugin_update_cancel", MethodOwner::Core, OriginClass::Main),
+    spec(
+        "plugin_update_runtime_ready",
+        MethodOwner::Core,
+        OriginClass::Main,
+    ),
+    spec(
+        "plugin_update_editing",
+        MethodOwner::Core,
+        OriginClass::Main,
+    ),
     spec("plugin_inspect_path", MethodOwner::Core, OriginClass::Main),
     spec("plugin_install", MethodOwner::Core, OriginClass::Main),
     spec("plugin_set_enabled", MethodOwner::Core, OriginClass::Main),
@@ -665,6 +694,42 @@ const METHODS: &[MethodSpec] = &[
     spec("plugin_read_asset", MethodOwner::Core, OriginClass::Main),
     spec("plugin_settings_get", MethodOwner::Core, OriginClass::Main),
     spec("plugin_settings_set", MethodOwner::Core, OriginClass::Main),
+    spec(
+        "host_updater_check",
+        MethodOwner::Host,
+        OriginClass::MainRenderer,
+    ),
+    spec(
+        "host_updater_download",
+        MethodOwner::Host,
+        OriginClass::MainRenderer,
+    ),
+    spec(
+        "host_updater_install",
+        MethodOwner::Host,
+        OriginClass::MainRenderer,
+    ),
+    spec(
+        "host_updater_start",
+        MethodOwner::Host,
+        OriginClass::MainRenderer,
+    ),
+    spec(
+        "host_updater_status",
+        MethodOwner::Host,
+        OriginClass::MainRenderer,
+    ),
+    spec(
+        "host_updater_cancel",
+        MethodOwner::Host,
+        OriginClass::MainRenderer,
+    ),
+    spec(
+        "host_updater_preferences",
+        MethodOwner::Host,
+        OriginClass::MainRenderer,
+    ),
+    spec("core_shutdown_cancel", MethodOwner::Core, OriginClass::Host),
     spec("core_ping", MethodOwner::Core, OriginClass::Main),
     spec("platform_attach", MethodOwner::Core, OriginClass::Main),
     spec(
@@ -721,6 +786,14 @@ const METHODS: &[MethodSpec] = &[
 ];
 
 pub const PROTOCOL_ONLY_METHODS: &[&str] = &[
+    "host_updater_check",
+    "host_updater_download",
+    "host_updater_install",
+    "host_updater_start",
+    "host_updater_status",
+    "host_updater_cancel",
+    "host_updater_preferences",
+    "core_shutdown_cancel",
     "core_ping",
     "platform_attach",
     "core_shutdown_prepare",
@@ -774,6 +847,7 @@ const fn timeout_class(name: &str) -> TimeoutClass {
         || const_eq(name, "platform_export_diagnostics")
         || const_eq(name, "provider_playlist")
         || const_eq(name, "qqmusic_playlist")
+        || const_eq(name, "core_shutdown_prepare")
     {
         TimeoutClass::Long
     } else {

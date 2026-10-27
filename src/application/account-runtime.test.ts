@@ -10,6 +10,7 @@ import {
   type FavoriteMutationResult,
   type Page,
   type PlaylistMutationResult,
+  type RemotePlayHistoryItem,
   type Song,
 } from '../domain/music';
 import type { AccountMusicProvider, MusicProvider } from '../providers/music-provider';
@@ -946,6 +947,33 @@ describe('account runtime', () => {
       [second.id]: true,
       [third.id]: true,
       [stale.id]: false,
+    });
+  });
+
+  it('orders loaded history across upstream batches and keeps the latest duplicate', async () => {
+    const [first, second, third, fourth] = allSongs;
+    const item = (song: Song, playedAtMs: number | null): RemotePlayHistoryItem => ({
+      song,
+      playedAtMs,
+      source: 'provider-account',
+    });
+    const getAccountRecentlyPlayed = vi
+      .fn()
+      .mockResolvedValueOnce(
+        page([item(first!, 100), item(second!, 300), item(fourth!, null)], 3, 'next-batch'),
+      )
+      .mockResolvedValueOnce(page([item(third!, 400), item(first!, 500), item(second!, 200)], 3));
+    const provider = accountProvider({ getAccountRecentlyPlayed });
+    useAccountStore.setState({ snapshot: authenticatedSnapshot(3) });
+    await useAccountStore.getState().loadRecent(provider);
+    expect(useAccountStore.getState().recent).toMatchObject({
+      data: [item(second!, 300), item(first!, 100), item(fourth!, null)],
+    });
+    await useAccountStore.getState().loadNext(provider, 'recent');
+    expect(useAccountStore.getState().recent).toMatchObject({
+      status: 'ready',
+      nextCursor: null,
+      data: [item(first!, 500), item(third!, 400), item(second!, 300), item(fourth!, null)],
     });
   });
 

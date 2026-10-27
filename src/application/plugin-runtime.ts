@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import type { PluginUpdateOperation, PluginReleaseInfo } from '@yaqmc/client';
 import {
   BUILTIN_CLASSIC_ID,
   factoryScene,
@@ -43,6 +44,7 @@ export interface PluginScanReport {
 }
 
 export interface PluginRecord {
+  release?: PluginReleaseInfo | null;
   id: string;
   name: string;
   version: string;
@@ -94,6 +96,7 @@ export interface ActiveScriptResource {
   pluginId: string;
   pluginName?: string;
   source: string;
+  packageSha256?: string;
 }
 
 export interface ActivePluginResources {
@@ -138,6 +141,15 @@ const SCENE_STYLE_ATTR = 'data-yaqmc-plugin-scene-style';
 let workers = new Map<string, Worker>();
 let runtimeTokens = new Map<string, string>();
 let workerPermissions = new Map<string, ReadonlySet<string>>();
+const workerFingerprints = new Map<string, string>();
+const pluginEpochs = new Map<string, number>();
+const updatingPlugins = new Set<string>();
+const quiescingPlugins = new Set<string>();
+const workerReadiness = new Map<
+  string,
+  { promise: Promise<string | null>; resolve: (error: string | null) => void }
+>();
+const stagedEffects = new Map<string, Array<() => void>>();
 let lastPositionEmit = 0;
 let lastTrackKey = '';
 let lastLineKey = '';
@@ -345,17 +357,17 @@ var ctx = {
 };
 var definePlugin = function (definition) { self.__yaqmcPlugin = definition; };
 self.definePlugin = definePlugin;
-try {
+(async function () { try {
 ${source}
   var plugin = self.__yaqmcPlugin;
   if (plugin && typeof plugin.activate === 'function') {
-    var cleanup = plugin.activate(ctx);
+    var cleanup = await plugin.activate(ctx);
     self.__yaqmcCleanup = typeof cleanup === 'function' ? cleanup : function () {};
   }
   self.postMessage({ type: 'yaqmc/ready' });
 } catch (error) {
   self.postMessage({ type: 'yaqmc/error', message: String(error && error.message ? error.message : error) });
-}
+} })();
 `;
 }
 
@@ -363,30 +375,52 @@ function cssIdent(pluginId: string): string {
   return pluginId.replace(/[^a-z0-9-]+/gi, '-');
 }
 
-function clearInjectedStyles(attribute: string): void {
-  document.querySelectorAll(`style[${attribute}]`).forEach((node) => node.remove());
-}
-
 function applyStyleSheets(sheets: ActiveStyleSheet[]): void {
-  clearInjectedStyles(STYLE_ATTR);
-  sheets.forEach((sheet, index) => {
-    const style = document.createElement('style');
-    style.setAttribute(STYLE_ATTR, sheet.pluginId);
-    style.setAttribute('data-yaqmc-style-order', String(index));
-    style.textContent = `@layer yaqmc-plugin-style.${cssIdent(sheet.pluginId)} {\n${sheet.css}\n}`;
-    document.head.appendChild(style);
-  });
+  syncStyleNodes(
+    STYLE_ATTR,
+    sheets.map((sheet, index) => ({
+      id: sheet.pluginId,
+      key: `${sheet.pluginId}:${index}`,
+      css: `@layer yaqmc-plugin-style.${cssIdent(sheet.pluginId)} {\n${sheet.css}\n}`,
+    })),
+  );
 }
 
 function applySceneSheets(scenes: ActiveSceneResource[]): void {
-  clearInjectedStyles(SCENE_STYLE_ATTR);
-  for (const scene of scenes) {
-    if (!scene.css) continue;
-    const style = document.createElement('style');
-    style.setAttribute(SCENE_STYLE_ATTR, scene.pluginId);
-    style.textContent = `@scope ([data-yaqmc-plugin-scene="${scene.pluginId}/${scene.sceneId}"]) {\n${scene.css}\n}`;
-    document.head.appendChild(style);
-  }
+  syncStyleNodes(
+    SCENE_STYLE_ATTR,
+    scenes
+      .filter((s) => s.css)
+      .map((s) => ({
+        id: s.pluginId,
+        key: `${s.pluginId}/${s.sceneId}`,
+        css: `@scope ([data-yaqmc-plugin-scene="${s.pluginId}/${s.sceneId}"]) {\n${s.css}\n}`,
+      })),
+  );
+}
+
+function syncStyleNodes(
+  attribute: string,
+  entries: Array<{ id: string; key: string; css: string }>,
+): void {
+  const previous = new Map(
+    [...document.querySelectorAll<HTMLStyleElement>(`style[${attribute}]`)].map((node) => [
+      node.dataset.pluginResourceKey,
+      node,
+    ]),
+  );
+  const nodes = entries.map((entry) => {
+    const node = previous.get(entry.key) ?? document.createElement('style');
+    previous.delete(entry.key);
+    node.setAttribute(attribute, entry.id);
+    node.dataset.pluginResourceKey = entry.key;
+    if (node.textContent !== entry.css) node.textContent = entry.css;
+    return node;
+  });
+  previous.forEach((node) => node.remove());
+  const current = [...document.querySelectorAll(`style[${attribute}]`)];
+  if (nodes.some((node, index) => current[index] !== node))
+    nodes.forEach((node) => document.head.appendChild(node));
 }
 
 function toPluginPreset(scene: ActiveSceneResource): LyricsPresetDefinition | null {
@@ -446,6 +480,32 @@ function stopScripts(): void {
   );
   runtimeTokens = new Map();
   clearPluginUi();
+  workerFingerprints.clear();
+  for (const ready of workerReadiness.values()) ready.resolve('plugin-stopped');
+  workerReadiness.clear();
+}
+
+async function retireOnePlugin(id: string): Promise<void> {
+  pluginEpochs.set(id, (pluginEpochs.get(id) ?? 0) + 1);
+  workers.get(id)?.terminate();
+  workers.delete(id);
+  workerPermissions.delete(id);
+  workerFingerprints.delete(id);
+  workerReadiness.get(id)?.resolve('plugin-stopped');
+  workerReadiness.delete(id);
+  stagedEffects.delete(id);
+  clearPluginUi(id);
+  if (typeof document !== 'undefined') {
+    for (const attr of [STYLE_ATTR, SCENE_STYLE_ATTR]) {
+      document.querySelectorAll(`style[${attr}]`).forEach((node) => {
+        if (node.getAttribute(attr) === id) node.remove();
+      });
+    }
+  }
+  if (sceneInstance.pluginId === id) resetSceneBehavior();
+  const token = runtimeTokens.get(id);
+  runtimeTokens.delete(id);
+  if (token) await client.invoke('plugin_runtime_stop', { token }).catch(() => undefined);
 }
 
 function asUiAction(
@@ -551,11 +611,26 @@ async function startScripts(
   grants: ReadonlyMap<string, readonly string[]>,
   generation: number,
 ): Promise<void> {
+  const desired = new Set(scripts.map((s) => s.pluginId));
+  for (const id of workers.keys()) if (!desired.has(id)) await retireOnePlugin(id);
   for (const script of scripts) {
     if (generation !== runtimeGeneration) return;
+    const fingerprint = JSON.stringify([
+      script.packageSha256,
+      script.source,
+      grants.get(script.pluginId),
+    ]);
+    if (workerFingerprints.get(script.pluginId) === fingerprint && workers.has(script.pluginId))
+      continue;
+    await retireOnePlugin(script.pluginId);
+    const epoch = pluginEpochs.get(script.pluginId);
     try {
       const token = await client.invoke('plugin_runtime_start', { pluginId: script.pluginId });
-      if (generation !== runtimeGeneration) {
+      if (
+        generation !== runtimeGeneration ||
+        pluginEpochs.get(script.pluginId) !== epoch ||
+        quiescingPlugins.has(script.pluginId)
+      ) {
         await client.invoke('plugin_runtime_stop', { token }).catch(() => undefined);
         return;
       }
@@ -566,6 +641,11 @@ async function startScripts(
       const url = URL.createObjectURL(blob);
       const worker = new Worker(url, { name: `yaqmc-plugin-${script.pluginId}` });
       URL.revokeObjectURL(url);
+      let resolveReady!: (error: string | null) => void;
+      const promise = new Promise<string | null>((resolve) => {
+        resolveReady = resolve;
+      });
+      workerReadiness.set(script.pluginId, { promise, resolve: resolveReady });
       worker.onmessage = (event: MessageEvent) => {
         if (generation !== runtimeGeneration || workers.get(script.pluginId) !== worker) return;
         const data = event.data as {
@@ -575,16 +655,22 @@ async function startScripts(
           payload?: unknown;
           message?: string;
         };
+        if (data.type === 'yaqmc/ready') {
+          resolveReady(null);
+          return;
+        }
         if (data.type === 'yaqmc/error') {
+          resolveReady(data.message ?? 'plugin runtime error');
           logger.error('plugin.runtime.error', data.message ?? 'plugin runtime error', {
             pluginId: script.pluginId,
           });
-          void client
-            .invoke('plugin_mark_failed', {
-              id: script.pluginId,
-              reason: data.message ?? 'plugin runtime error',
-            })
-            .catch(() => undefined);
+          if (!updatingPlugins.has(script.pluginId))
+            void client
+              .invoke('plugin_mark_failed', {
+                id: script.pluginId,
+                reason: data.message ?? 'plugin runtime error',
+              })
+              .catch(() => undefined);
           worker.terminate();
           workers.delete(script.pluginId);
           workerPermissions.delete(script.pluginId);
@@ -602,9 +688,16 @@ async function startScripts(
               payload: data.payload ?? {},
             },
           })
-          .then((value) => {
+          .then(async (value) => {
+            if (applyingPromise) await applyingPromise;
             if (generation !== runtimeGeneration || workers.get(script.pluginId) !== worker) return;
-            applyBridgeSideEffect(script, data.method ?? '', data.payload, value);
+            const effect = () =>
+              applyBridgeSideEffect(script, data.method ?? '', data.payload, value);
+            if (updatingPlugins.has(script.pluginId)) {
+              const effects = stagedEffects.get(script.pluginId) ?? [];
+              effects.push(effect);
+              stagedEffects.set(script.pluginId, effects);
+            } else effect();
             worker.postMessage({ type: 'yaqmc/result', id: data.id, ok: true, value });
           })
           .catch((error: unknown) => {
@@ -620,20 +713,24 @@ async function startScripts(
       worker.onerror = (event) => {
         if (generation !== runtimeGeneration || workers.get(script.pluginId) !== worker) return;
         logger.error('plugin.runtime.error', event.message, { pluginId: script.pluginId });
-        void client
-          .invoke('plugin_mark_failed', {
-            id: script.pluginId,
-            reason: event.message || 'plugin runtime error',
-          })
-          .catch(() => undefined);
+        resolveReady(event.message || 'plugin runtime error');
+        if (!updatingPlugins.has(script.pluginId))
+          void client
+            .invoke('plugin_mark_failed', {
+              id: script.pluginId,
+              reason: event.message || 'plugin runtime error',
+            })
+            .catch(() => undefined);
         clearPluginUi(script.pluginId);
       };
       workers.set(script.pluginId, worker);
+      workerFingerprints.set(script.pluginId, fingerprint);
       workerPermissions.set(script.pluginId, new Set(grants.get(script.pluginId) ?? []));
     } catch (error) {
       if (generation !== runtimeGeneration) return;
       const reason = error instanceof Error ? error.message : 'plugin runtime failed to start';
       logger.error('plugin.runtime.error', reason, { pluginId: script.pluginId });
+      if (updatingPlugins.has(script.pluginId)) throw error;
       void client
         .invoke('plugin_mark_failed', { id: script.pluginId, reason })
         .catch(() => undefined);
@@ -698,6 +795,7 @@ export function broadcastPluginEvent(event: string, payload: unknown): boolean {
     return false;
   }
   for (const [pluginId, worker] of workers) {
+    if (updatingPlugins.has(pluginId)) continue;
     if (required !== null && !workerPermissions.get(pluginId)?.has(required)) continue;
     worker.postMessage({ type: 'yaqmc/event', event, payload });
   }
@@ -777,7 +875,7 @@ export async function installUnpackedPlugin(
 }
 
 export async function reloadPlugin(id: string): Promise<PluginRecord> {
-  return withRetiredPluginCapabilities(() => client.invoke('plugin_reload', { id }));
+  return client.invoke('plugin_reload', { id });
 }
 
 export async function pluginSettingsGet(id: string): Promise<Record<string, unknown>> {
@@ -844,9 +942,16 @@ async function applyPluginResourcesSnapshot(
   // scene state while a newer plugin://changed event is being processed.
   if (generation !== resourceGeneration) return null;
 
-  applyStyleSheets(resources.safeMode ? [] : resources.styles);
-  applySceneSheets(resources.safeMode ? [] : resources.scenes);
-  const scenes = resources.safeMode ? [] : resources.scenes;
+  if (resources.safeMode) stopScripts();
+  applyStyleSheets(
+    resources.safeMode ? [] : resources.styles.filter((s) => !quiescingPlugins.has(s.pluginId)),
+  );
+  applySceneSheets(
+    resources.safeMode ? [] : resources.scenes.filter((s) => !quiescingPlugins.has(s.pluginId)),
+  );
+  const scenes = resources.safeMode
+    ? []
+    : resources.scenes.filter((s) => !quiescingPlugins.has(s.pluginId));
   const presets = scenes
     .map(toPluginPreset)
     .filter((preset): preset is LyricsPresetDefinition => preset !== null);
@@ -872,7 +977,11 @@ async function applyPluginResourcesSnapshot(
     preferences.setTransportPreset(surface, builtinId);
   }
   if (generation !== resourceGeneration) return null;
-  await startScripts(resources.safeMode ? [] : resources.scripts, grants, runtimeGeneration);
+  await startScripts(
+    resources.safeMode ? [] : resources.scripts.filter((s) => !quiescingPlugins.has(s.pluginId)),
+    grants,
+    runtimeGeneration,
+  );
   if (generation !== resourceGeneration) return null;
   if (resources.safeMode) resetSceneBehavior();
   const selected = usePreferencesStore.getState().lyricsPresets.selectedId;
@@ -915,11 +1024,14 @@ function retirePluginCapabilities(): void {
  * the renderer is re-synchronised from host truth.  A failed mutation still
  * refreshes, so the renderer never keeps capabilities the host no longer has.
  */
-async function withRetiredPluginCapabilities<T>(mutate: () => Promise<T>): Promise<T> {
+async function withRetiredPluginCapabilities<T>(mutate: () => Promise<T>, id?: string): Promise<T> {
   pendingGrantMutations += 1;
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   try {
-    retirePluginCapabilities();
+    if (id) {
+      resourceGeneration += 1;
+      await retireOnePlugin(id);
+    } else retirePluginCapabilities();
     outcome = { ok: true, value: await mutate() };
   } catch (error) {
     outcome = { ok: false, error };
@@ -946,7 +1058,7 @@ async function withRetiredPluginCapabilities<T>(mutate: () => Promise<T>): Promi
 export function applyPluginResources(): Promise<ActivePluginResources | null> {
   if (!hasHostCapability('plugins')) return Promise.resolve(null);
 
-  retirePluginCapabilities();
+  resourceGeneration += 1;
 
   if (applyingPromise) return applyingPromise;
 
@@ -997,16 +1109,19 @@ export async function setPluginEnabled(
   enabled: boolean,
   grant: string[] = [],
 ): Promise<PluginRecord> {
-  return withRetiredPluginCapabilities(() =>
-    client.invoke('plugin_set_enabled', {
-      request: { id, enabled, grant },
-    }),
+  return withRetiredPluginCapabilities(
+    () =>
+      client.invoke('plugin_set_enabled', {
+        request: { id, enabled, grant },
+      }),
+    id,
   );
 }
 
 export async function uninstallPlugin(id: string, removeData: boolean): Promise<void> {
-  await withRetiredPluginCapabilities(() =>
-    client.invoke('plugin_uninstall', { request: { id, removeData } }),
+  await withRetiredPluginCapabilities(
+    () => client.invoke('plugin_uninstall', { request: { id, removeData } }),
+    id,
   );
 }
 
@@ -1043,6 +1158,70 @@ export function pluginDiagnosticsText(record: PluginRecord): string {
     .join('\n');
 }
 
+const handledUpdateStages = new Set<string>();
+export async function handlePluginUpdateProgress(operation: PluginUpdateOperation): Promise<void> {
+  const preview = operation.preview;
+  if (!preview) return;
+  const id = preview.pluginId;
+  const key = `${operation.operationId}:${operation.phase}`;
+  if (handledUpdateStages.has(key)) return;
+  if (!['quiescing', 'validating', 'completed', 'failed', 'cancelled'].includes(operation.phase))
+    return;
+  handledUpdateStages.add(key);
+  if (handledUpdateStages.size > 256)
+    handledUpdateStages.delete(handledUpdateStages.values().next().value!);
+  if (operation.phase === 'quiescing' || operation.phase === 'validating') {
+    if (!preview.needsRenderer || (operation.phase === 'quiescing' && !preview.enabled)) return;
+    let failure: string | undefined;
+    updatingPlugins.add(id);
+    try {
+      resourceGeneration += 1;
+      if (operation.phase === 'quiescing') {
+        quiescingPlugins.add(id);
+        await retireOnePlugin(id);
+      } else {
+        quiescingPlugins.delete(id);
+        await applyPluginResources();
+        const readiness = workerReadiness.get(id);
+        if (preview.hasScript && !readiness) throw new Error('plugin-script-not-mounted');
+        if (readiness) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const result = await Promise.race([
+            readiness.promise,
+            new Promise<string>((resolve) => {
+              timer = setTimeout(() => resolve('plugin-ready-timeout'), 12000);
+            }),
+          ]).finally(() => {
+            if (timer) clearTimeout(timer);
+          });
+          if (result) throw new Error(result);
+        }
+      }
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    await client.invoke('plugin_update_runtime_ready', {
+      request: {
+        operationId: operation.operationId,
+        sha256: preview.sha256,
+        stage: operation.phase,
+        ...(failure ? { error: failure } : {}),
+      },
+    });
+  } else if (operation.runtimeChanged) {
+    // Historical terminal operations returned after a renderer reconnect must
+    // not retire a newer, already running installation.
+    if (!updatingPlugins.has(id)) return;
+    updatingPlugins.delete(id);
+    quiescingPlugins.delete(id);
+    if (operation.phase === 'completed' && preview.enabled) {
+      for (const effect of stagedEffects.get(id) ?? []) effect();
+      stagedEffects.delete(id);
+    } else await retireOnePlugin(id);
+    await applyPluginResources();
+  }
+}
+
 export function usePluginHost(): void {
   useEffect(() => {
     if (!hasHostCapability('plugins')) return;
@@ -1051,8 +1230,28 @@ export function usePluginHost(): void {
         logger.error('plugin.resources.load_failed', error);
       });
     };
-    refresh();
-    const unlisten = client.on('plugin://changed', refresh);
+    const unlisten = client.on('plugin://changed', ({ pluginId, updateOperationId }) => {
+      if (updateOperationId) {
+        refresh();
+        return;
+      }
+      resourceGeneration += 1;
+      void retireOnePlugin(pluginId)
+        .then(refresh)
+        .catch((error: unknown) => logger.error('plugin.resources.load_failed', error));
+    });
+    const unlistenUpdates = client.on('plugin://update-progress', (operation) => {
+      void handlePluginUpdateProgress(operation).catch((error: unknown) =>
+        logger.error('plugin.update.runtime_failed', error),
+      );
+    });
+    void client
+      .invoke('plugin_update_status', {})
+      .then(async (operations) => {
+        for (const operation of operations) await handlePluginUpdateProgress(operation);
+      })
+      .catch(() => undefined)
+      .finally(refresh);
     const unsubscribePlayer = usePlayerStore.subscribe((state, previous) => {
       const track = state.queue[state.currentIndex ?? -1];
       const previousTrack = previous.queue[previous.currentIndex ?? -1];
@@ -1138,6 +1337,7 @@ export function usePluginHost(): void {
     });
     return () => {
       unlisten();
+      unlistenUpdates();
       unsubscribePlayer();
       unsubscribeLyrics();
       unsubscribePrefs();

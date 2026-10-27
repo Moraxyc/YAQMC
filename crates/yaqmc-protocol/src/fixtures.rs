@@ -17,9 +17,10 @@ use crate::{
     CHANNEL_APP_OPEN_SETTINGS, CHANNEL_CORE_LOG, CHANNEL_HOST_COMMAND, CHANNEL_HOST_CORE_STATUS,
     CHANNEL_HOST_UPDATE, CHANNEL_LYRICS_DOCUMENT, CHANNEL_LYRICS_PROJECTION,
     CHANNEL_LYRICS_SURFACE_CLOSED, CHANNEL_LYRICS_SURFACE_INTERACTION, CHANNEL_PLAYER_SNAPSHOT,
-    CHANNEL_PLUGIN_CHANGED, CHANNEL_PREFERENCES_CHANGED, CHANNEL_PROVIDER_PROFILES_CHANGED,
-    CORE_EVENT_CHANNELS, DEFAULT_METHOD_PAYLOAD_BYTES, FRAME_HARD_CAP_BYTES, HANDSHAKE_TIMEOUT,
-    HOST_EVENT_CHANNELS, PROTOCOL_VERSION, SHUTDOWN_TIMEOUT,
+    CHANNEL_PLUGIN_CHANGED, CHANNEL_PLUGIN_UPDATE_PROGRESS, CHANNEL_PREFERENCES_CHANGED,
+    CHANNEL_PROVIDER_PROFILES_CHANGED, CORE_EVENT_CHANNELS, DEFAULT_METHOD_PAYLOAD_BYTES,
+    FRAME_HARD_CAP_BYTES, HANDSHAKE_TIMEOUT, HOST_EVENT_CHANNELS, PROTOCOL_VERSION,
+    SHUTDOWN_TIMEOUT,
 };
 
 pub fn contract_fixtures_dir() -> PathBuf {
@@ -222,6 +223,20 @@ fn events() -> Value {
             channel: CHANNEL_PLUGIN_CHANGED.to_owned(),
             payload: json!({ "pluginId": "example", "enabled": true }),
         }),
+        CHANNEL_PLUGIN_UPDATE_PROGRESS: to_value(&CoreMessage::Event {
+            seq: 6,
+            channel: CHANNEL_PLUGIN_UPDATE_PROGRESS.to_owned(),
+            payload: json!({
+                "operationId": "operation-0",
+                "pluginId": "example",
+                "phase": "prepared",
+                "preview": null,
+                "downloadedBytes": 0,
+                "totalBytes": null,
+                "error": null,
+                "runtimeChanged": false
+            }),
+        }),
         CHANNEL_PREFERENCES_CHANGED: to_value(&CoreMessage::Event {
             seq: 6,
             channel: CHANNEL_PREFERENCES_CHANGED.to_owned(),
@@ -405,7 +420,7 @@ fn lyrics_document_payload() -> Value {
 }
 
 fn requests() -> Value {
-    json!({
+    let mut values = json!({
         "player_snapshot": to_value(&CoreMessage::Request {
             id: 1,
             method: "player_snapshot".to_owned(),
@@ -573,11 +588,24 @@ fn requests() -> Value {
             params: Some(json!({ "providerId": "qqmusic", "profileId": "work" })),
             origin: None,
         }),
-    })
+    });
+    for (index, (name, params, _)) in plugin_update_samples()
+        .into_iter()
+        .chain(app_update_samples())
+        .enumerate()
+    {
+        values[name] = to_value(&CoreMessage::Request {
+            id: 100 + index as u64,
+            method: name.to_owned(),
+            params: Some(params),
+            origin: Some(crate::WindowOrigin::Main),
+        });
+    }
+    values
 }
 
 fn responses() -> Value {
-    json!({
+    let mut values = json!({
         "player_snapshot": to_value(&CoreMessage::Response {
             id: 1,
             body: ResponseBody::success(player_snapshot_payload()),
@@ -659,5 +687,96 @@ fn responses() -> Value {
                 retryable: false,
             }),
         }),
-    })
+    });
+    for (index, (name, _, result)) in plugin_update_samples()
+        .into_iter()
+        .chain(app_update_samples())
+        .enumerate()
+    {
+        values[name] = to_value(&CoreMessage::Response {
+            id: 100 + index as u64,
+            body: ResponseBody::success(result),
+        });
+    }
+    values
+}
+
+fn plugin_update_samples() -> Vec<(&'static str, Value, Value)> {
+    let policy = json!({ "sourceId": null, "channel": "stable", "automatic": false, "bound": false,
+        "lastCheckMs": 0, "lastResult": null, "failedSha256": null, "failedReleaseId": null, "trustDigest": "", "sourceHistory": {},
+        "feedSequence": 0, "feedDigest": "", "releasesSeen": {}, "retryAfterMs": 0, "failures": 0 });
+    let operation = json!({ "operationId": "operation-0", "pluginId": "dev.example.update", "phase": "prepared", "downloadedBytes": 0, "totalBytes": null, "error": null, "runtimeChanged": false,
+        "preview": { "pluginId": "dev.example.update", "providerIds": ["example.music"], "name": "Example", "currentVersion": "1.0.0", "expectedGeneration": 1, "version": "1.0.0", "currentSha256": "a".repeat(64), "sha256": "b".repeat(64),
+            "release": { "channel": "stable", "buildId": "hotfix-1", "releaseSequence": 2 }, "permissions": ["plugin.storage"], "grantedPermissions": ["plugin.storage"], "addedPermissions": [], "removedPermissions": [], "sessionChanges": [], "confirmations": ["replacement", "unverified-source"], "trustedSource": null, "enabled": true, "needsRenderer": true, "hasScript": true } });
+    vec![
+        (
+            "plugin_update_policy_get",
+            json!({ "id": "dev.example.update" }),
+            json!({ "policy": policy.clone(), "sources": [], "available": [] }),
+        ),
+        (
+            "plugin_update_policy_set",
+            json!({ "request": { "pluginId": "dev.example.update", "sourceId": null, "channel": "stable", "automatic": false, "confirmSource": false } }),
+            policy,
+        ),
+        (
+            "plugin_update_check",
+            json!({ "pluginId": "dev.example.update" }),
+            operation.clone(),
+        ),
+        (
+            "plugin_update_prepare",
+            json!({ "request": { "pluginId": "dev.example.update", "path": "C:/Downloads/example.yaqmc-plugin" } }),
+            operation.clone(),
+        ),
+        (
+            "plugin_update_apply",
+            json!({ "request": { "operationId": "operation-0", "confirm": true, "grant": [], "stopUsing": false } }),
+            operation.clone(),
+        ),
+        (
+            "plugin_update_status",
+            json!({ "operationId": "operation-0" }),
+            json!([operation]),
+        ),
+        (
+            "plugin_update_cancel",
+            json!({ "operationId": "operation-0" }),
+            Value::Null,
+        ),
+        (
+            "plugin_update_runtime_ready",
+            json!({ "request": { "operationId": "operation-0", "sha256": "b".repeat(64), "stage": "validating" } }),
+            Value::Null,
+        ),
+        (
+            "plugin_update_editing",
+            json!({ "id": "dev.example.update", "editing": true }),
+            Value::Null,
+        ),
+    ]
+}
+
+fn app_update_samples() -> Vec<(&'static str, Value, Value)> {
+    let status = json!({"state":"idle", "canInstall":false, "allowPrerelease":false,
+        "channel":"latest", "currentVersion":"0.1.1", "buildSource":"source",
+        "packageKind":"managed", "installDisabledReason":"non-release-build"});
+    vec![
+        ("host_updater_check", json!({}), status.clone()),
+        ("host_updater_download", json!({}), status.clone()),
+        ("host_updater_install", json!({}), status.clone()),
+        ("host_updater_status", json!({}), status.clone()),
+        (
+            "host_updater_start",
+            json!({"candidateId":"a".repeat(64)}),
+            status.clone(),
+        ),
+        ("host_updater_cancel", json!({}), status.clone()),
+        (
+            "host_updater_preferences",
+            json!({"includePrerelease":true}),
+            status,
+        ),
+        ("core_shutdown_cancel", json!({}), Value::Null),
+    ]
 }

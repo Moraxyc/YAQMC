@@ -5,6 +5,7 @@
     "lyrics://projection",
     "lyrics://document",
     "plugin://changed",
+    "plugin://update-progress",
     "preferences://changed",
     "host://command",
     "core://log",

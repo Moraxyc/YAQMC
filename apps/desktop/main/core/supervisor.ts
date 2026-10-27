@@ -302,6 +302,54 @@ export class CoreSupervisor extends EventEmitter {
     client.close();
   }
 
+  /** Updates may replace Core files only after its acknowledged, actual exit. */
+  async stopForUpdate(): Promise<void> {
+    this.stopping = true;
+    this.allowRestart = false;
+    this.stopWatchdog();
+    const child = this.child;
+    const client = this.clientInstance;
+    if (!child || !client) throw new Error('update-core-unavailable');
+    if (child.exitCode !== null) throw new Error('update-core-already-exited');
+    const cancel = new AbortController();
+    const acknowledgement = nextMessage(
+      client,
+      60_000,
+      'shutdown',
+      (message) => message.kind === 'shutdown-ack',
+      cancel.signal,
+    );
+    let ack: CoreMessage;
+    try {
+      [, ack] = await Promise.all([
+        client.send({ kind: 'shutdown', reason: 'restart' }),
+        acknowledgement,
+      ]);
+    } finally {
+      cancel.abort();
+    }
+    if (ack.kind !== 'shutdown-ack') throw new Error('update-shutdown-not-acknowledged');
+    if (child.exitCode === null) {
+      await new Promise<void>((resolve, reject) => {
+        const exited = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          child.removeListener('exit', exited);
+          reject(new Error('update-core-did-not-exit'));
+        }, 10_000);
+        child.once('exit', exited);
+        if (child.exitCode !== null) {
+          child.removeListener('exit', exited);
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    }
+    client.close();
+  }
+
   private async spawnAndHandshake(): Promise<CoreIdentity> {
     reapStaleCorePid(this.options.dataDir, this.options.processProbe ?? defaultProcessProbe());
     verifyCoreBinary(this.options.binary, this.options.integrity ?? 'optional');
@@ -477,6 +525,8 @@ function nextMessage(
   client: CoreClient,
   timeoutMs: number,
   label: 'handshake' | 'shutdown',
+  accept?: (message: CoreMessage) => boolean,
+  signal?: AbortSignal,
 ): Promise<CoreMessage> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -485,6 +535,7 @@ function nextMessage(
     }, timeoutMs);
 
     const onMessage = (message: CoreMessage): void => {
+      if (accept && !accept(message)) return;
       cleanup();
       resolve(message);
     };
@@ -492,15 +543,18 @@ function nextMessage(
       cleanup();
       reject(error);
     };
+    const onAbort = () => onFail(new Error('shutdown cancelled'));
     const cleanup = (): void => {
       clearTimeout(timer);
       client.off('message', onMessage);
       client.off('error', onFail);
       client.off('close', onFail);
+      signal?.removeEventListener('abort', onAbort);
     };
 
     client.on('message', onMessage);
     client.on('error', onFail);
     client.on('close', onFail);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

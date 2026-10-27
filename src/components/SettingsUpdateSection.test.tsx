@@ -1,187 +1,176 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { YaqmcClient, createFakeBridge, type UpdatePayload } from '@yaqmc/client';
+import type { AppUpdateCandidate, UpdatePayload } from '@yaqmc/client';
 import i18n from '../i18n';
 import {
-  HOST_UPDATER_CHECK_METHOD,
-  HOST_UPDATER_DOWNLOAD_METHOD,
-  HOST_UPDATER_INSTALL_METHOD,
   IDLE_UPDATE_PAYLOAD,
-  NOT_WIRED_ERROR,
   SettingsUpdateSection,
   isUpdateCheckBusy,
-  notWiredUpdatePayload,
-  requestHostUpdateCheck,
-  requestHostUpdateDownload,
-  requestHostUpdateInstall,
 } from './SettingsUpdateSection';
-
-const invokeMock = vi.hoisted(() => vi.fn());
-const openExternalMock = vi.hoisted(() => vi.fn());
-const updateListeners = vi.hoisted(() => ({
-  handler: undefined as ((payload: UpdatePayload) => void) | undefined,
+const mocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  open: vi.fn(),
+  handler: undefined as ((value: UpdatePayload) => void) | undefined,
 }));
-
 vi.mock('../application/yaqmc-runtime', () => ({
   getYaqmcClient: () => ({
-    on: (_channel: string, handler: (payload: UpdatePayload) => void) => {
-      updateListeners.handler = handler;
+    invoke: mocks.invoke,
+    on: (_channel: string, handler: (value: UpdatePayload) => void) => {
+      mocks.handler = handler;
       return () => {
-        updateListeners.handler = undefined;
+        mocks.handler = undefined;
       };
     },
-    invoke: invokeMock,
-    host: { shell: { openExternal: openExternalMock } },
+    host: { shell: { openExternal: mocks.open } },
   }),
 }));
-
-function emitUpdate(payload: UpdatePayload) {
-  updateListeners.handler?.(payload);
-}
-
-function payload(state: UpdatePayload['state'], extra: Partial<UpdatePayload> = {}): UpdatePayload {
-  return {
-    ...IDLE_UPDATE_PAYLOAD,
-    state,
-    ...extra,
-  };
-}
-
-describe('updater settings helpers', () => {
-  it('treats checking and downloading as busy and does not auto-install', () => {
-    expect(isUpdateCheckBusy('idle')).toBe(false);
-    expect(isUpdateCheckBusy('available')).toBe(false);
-    expect(isUpdateCheckBusy('ready-to-install')).toBe(false);
-    expect(isUpdateCheckBusy('checking')).toBe(true);
-    expect(isUpdateCheckBusy('downloading')).toBe(true);
-  });
-
-  it('invokes the host_updater_check seam string', async () => {
-    const invoke = vi.fn().mockResolvedValue(undefined);
-    await requestHostUpdateCheck({ invoke });
-    expect(invoke).toHaveBeenCalledWith(HOST_UPDATER_CHECK_METHOD);
-    await requestHostUpdateDownload({ invoke });
-    expect(invoke).toHaveBeenCalledWith(HOST_UPDATER_DOWNLOAD_METHOD);
-    await requestHostUpdateInstall({ invoke });
-    expect(invoke).toHaveBeenCalledWith(HOST_UPDATER_INSTALL_METHOD);
-  });
+const candidate: AppUpdateCandidate = {
+  id: 'reviewed-id',
+  releaseId: 1,
+  tag: 'v1.2.0',
+  version: '1.2.0',
+  releaseUrl: 'https://github.com/YAQMC/YAQMC/releases/tag/v1.2.0',
+  notes: '',
+  asset: {
+    id: 2,
+    name: 'package',
+    size: 1024 * 1024,
+    sha256: 'a'.repeat(64),
+    url: 'https://github.com/package',
+  },
+};
+const payload = (extra: Partial<UpdatePayload> = {}): UpdatePayload => ({
+  ...IDLE_UPDATE_PAYLOAD,
+  currentVersion: '1.0.0',
+  buildSource: 'official-release',
+  ...extra,
 });
-
-describe('SettingsUpdateSection', () => {
-  it('updates headings, actions and status when the language switches', async () => {
-    render(<SettingsUpdateSection />);
-    try {
-      await act(() => i18n.changeLanguage('zh-CN'));
-      expect(screen.getByRole('heading', { name: '更新' })).toBeVisible();
-      expect(screen.getByRole('button', { name: '检查更新' })).toBeVisible();
-      expect(screen.getByRole('status')).toHaveTextContent('尚未检查更新。');
-      act(() => emitUpdate(payload('available', { version: '1.2.3', canInstall: true })));
-      expect(screen.getByRole('status')).toHaveTextContent('发现新版本 1.2.3。');
-      expect(screen.getByRole('button', { name: '下载更新' })).toBeVisible();
-      await act(() => i18n.changeLanguage('en-US'));
-      expect(screen.getByRole('heading', { name: 'Updates' })).toBeVisible();
-      expect(screen.getByRole('status')).toHaveTextContent('Version 1.2.3 is available.');
-      expect(invokeMock).not.toHaveBeenCalled();
-    } finally {
-      await act(() => i18n.changeLanguage('en-US'));
-    }
-  });
-  beforeEach(() => {
-    invokeMock.mockReset();
-    openExternalMock.mockReset();
-    openExternalMock.mockResolvedValue(undefined);
-    invokeMock.mockRejectedValue(
-      new Error('host_updater_check is not implemented on the fake bridge'),
+beforeEach(async () => {
+  mocks.invoke.mockReset();
+  mocks.open.mockReset();
+  mocks.invoke.mockResolvedValue(undefined);
+  await i18n.changeLanguage('en-US');
+});
+describe('application update controls', () => {
+  it('restores a running operation on entry and displays progress without starting another task', async () => {
+    mocks.invoke.mockResolvedValue(
+      payload({
+        state: 'downloading',
+        progress: { transferred: 500, total: 1000, percent: 50 },
+        canCancel: true,
+      }),
     );
-    updateListeners.handler = undefined;
-  });
-
-  it('stays idle because the fake client emits nothing by default', () => {
     render(<SettingsUpdateSection />);
-    expect(screen.getByRole('heading', { name: 'Updates' })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveAttribute('data-update-state', 'idle');
-    expect(screen.getByRole('status')).toHaveTextContent('No update check has run yet.');
+    await screen.findByRole('progressbar', { name: 'Update download progress' });
+    expect(screen.getByRole('button', { name: 'Cancel download' })).toBeVisible();
+    expect(mocks.invoke).toHaveBeenCalledWith('host_updater_status');
+    expect(mocks.invoke).not.toHaveBeenCalledWith('host_updater_start', expect.anything());
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel download' }));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('host_updater_cancel'));
   });
-
-  it('follows host://update payloads for each stub state', () => {
-    render(<SettingsUpdateSection />);
-
-    act(() => emitUpdate(payload('checking')));
-    expect(screen.getByRole('status')).toHaveAttribute('data-update-state', 'checking');
-    expect(screen.getByRole('button', { name: 'Check for updates' })).toBeDisabled();
-
-    act(() => emitUpdate(payload('available', { version: '1.2.3', canInstall: true })));
-    expect(screen.getByRole('status')).toHaveTextContent('Version 1.2.3 is available.');
-    expect(screen.getByRole('button', { name: 'Download update' })).toBeInTheDocument();
-
-    act(() => emitUpdate(payload('not-available')));
-    expect(screen.getByRole('status')).toHaveTextContent('You are on the latest version.');
-
-    act(() => emitUpdate(payload('downloading')));
-    expect(screen.getByRole('status')).toHaveAttribute('data-update-state', 'downloading');
-    expect(screen.getByRole('button', { name: 'Check for updates' })).toBeDisabled();
-
-    act(() => emitUpdate(payload('ready-to-install', { canInstall: true, version: '1.2.3' })));
-    expect(screen.getByRole('status')).toHaveTextContent(
-      'Update downloaded. Restart YAQMC to install.',
-    );
-    expect(screen.getByRole('button', { name: 'Check for updates' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Restart to install' })).toBeInTheDocument();
-    expect(invokeMock).not.toHaveBeenCalled();
-
-    act(() => emitUpdate(payload('error', { error: 'feed 404' })));
-    expect(screen.getByRole('alert')).toHaveTextContent('feed 404');
-  });
-
-  it('dispatches a local not-wired error when host_updater_check is missing', async () => {
-    render(<SettingsUpdateSection />);
-    fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }));
-
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(HOST_UPDATER_CHECK_METHOD));
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        'Update checks are not wired in this build.',
-      ),
-    );
-    expect(notWiredUpdatePayload().error).toBe(NOT_WIRED_ERROR);
-  });
-
-  it('does not auto-install when an update is ready', () => {
-    render(<SettingsUpdateSection />);
-    act(() => emitUpdate(payload('ready-to-install', { canInstall: true })));
-    expect(screen.getByRole('button', { name: 'Restart to install' })).toBeInTheDocument();
-    expect(invokeMock).not.toHaveBeenCalled();
-  });
-
-  it('downloads only after a click and opens the release page for notify-only packages', async () => {
-    invokeMock.mockResolvedValue(undefined);
+  it('starts the fixed candidate once and never sends arbitrary paths or a second install command', async () => {
     render(<SettingsUpdateSection />);
     act(() =>
-      emitUpdate(
-        payload('available', {
+      mocks.handler?.(
+        payload({ state: 'available', canInstall: true, candidate, version: candidate.version }),
+      ),
+    );
+    expect(screen.getByText('Current version: 1.0.0')).toBeVisible();
+    expect(mocks.invoke).not.toHaveBeenCalledWith('host_updater_start', expect.anything());
+    mocks.invoke.mockResolvedValue(payload({ state: 'downloading', canInstall: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download, update and restart' }));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('host_updater_start', {
+        candidateId: 'reviewed-id',
+      }),
+    );
+    expect(mocks.invoke).not.toHaveBeenCalledWith('host_updater_install');
+  });
+  it('persists the prerelease choice through the host', async () => {
+    render(<SettingsUpdateSection />);
+    act(() => mocks.handler?.(payload()));
+    mocks.invoke.mockResolvedValue(payload({ state: 'checking', allowPrerelease: true }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Receive prereleases' }));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('host_updater_preferences', {
+        includePrerelease: true,
+      }),
+    );
+  });
+  it('keeps source and Android hosts notification-only', () => {
+    render(<SettingsUpdateSection mode="notify" />);
+    act(() =>
+      mocks.handler?.(
+        payload({
+          state: 'available',
           canInstall: true,
-          version: '1.2.3',
-          releaseUrl: 'https://github.com/YAQMC/YAQMC/releases',
-          releaseNotes: 'Release notes from the signed feed.',
+          buildSource: 'source',
+          version: '2.0.0',
+          releaseUrl: candidate.releaseUrl,
+          installDisabledReason: 'non-release-build',
         }),
       ),
     );
-    expect(screen.getByText('Release notes from the signed feed.')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Download update' }));
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(HOST_UPDATER_DOWNLOAD_METHOD));
-
+    expect(
+      screen.queryByRole('button', { name: 'Download, update and restart' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Receive prereleases' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open release page' }));
-    await waitFor(() =>
-      expect(openExternalMock).toHaveBeenCalledWith('https://github.com/YAQMC/YAQMC/releases'),
-    );
+    expect(mocks.open).toHaveBeenCalledWith(candidate.releaseUrl);
   });
-});
-
-describe('createFakeBridge host://update', () => {
-  it('registers the channel but emits no update payload by default', () => {
-    const seen: UpdatePayload[] = [];
-    const client = new YaqmcClient(createFakeBridge());
-    client.on('host://update', (next) => seen.push(next));
-    expect(seen).toEqual([]);
+  it('renders commit titles as text and only opens verified commit links', () => {
+    const sha = 'a'.repeat(40);
+    render(<SettingsUpdateSection />);
+    act(() =>
+      mocks.handler?.(
+        payload({
+          state: 'available',
+          releaseUrl: candidate.releaseUrl,
+          releaseNotes: `- [${sha.slice(0, 12)}](https://github.com/YAQMC/YAQMC/commit/${sha}) &lt;img src=x&gt; fix`,
+        }),
+      ),
+    );
+    fireEvent.click(screen.getByText('Commits in this release'));
+    expect(screen.getByText('<img src=x> fix')).toBeInTheDocument();
+    expect(document.querySelector('img')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: sha.slice(0, 12) }));
+    expect(mocks.open).toHaveBeenCalledWith(`https://github.com/YAQMC/YAQMC/commit/${sha}`);
+  });
+  it('localizes the one-click action and treats all installation stages as busy', async () => {
+    render(<SettingsUpdateSection />);
+    act(() => mocks.handler?.(payload({ state: 'available', canInstall: true, candidate })));
+    await act(() => i18n.changeLanguage('zh-CN'));
+    expect(screen.getByRole('button', { name: '下载、更新并重启' })).toBeVisible();
+    for (const state of [
+      'checking',
+      'downloading',
+      'verifying',
+      'waiting-to-restart',
+      'installing',
+      'restarting',
+    ] as const)
+      expect(isUpdateCheckBusy(state)).toBe(true);
+  });
+  it('keeps the truncation notice and only links the official complete commit attachment', () => {
+    const sha = 'a'.repeat(40);
+    const fullList = 'https://github.com/YAQMC/YAQMC/releases/download/v1.2.0/COMMITS.md';
+    render(<SettingsUpdateSection />);
+    const updateNotes = (url: string) =>
+      act(() =>
+        mocks.handler?.(
+          payload({
+            state: 'available',
+            releaseUrl: candidate.releaseUrl,
+            releaseNotes: `- [${sha.slice(0, 12)}](https://github.com/YAQMC/YAQMC/commit/${sha}) fix\n\n提交列表已截断 / Commit list truncated. [完整列表 / Full list](${url})`,
+          }),
+        ),
+      );
+    updateNotes(fullList);
+    fireEvent.click(screen.getByText('Commits in this release'));
+    expect(screen.getByText('Only part of the commit list is shown here.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View all commits' }));
+    expect(mocks.open).toHaveBeenCalledWith(fullList);
+    updateNotes('https://untrusted.example/COMMITS.md');
+    expect(screen.queryByRole('button', { name: 'View all commits' })).not.toBeInTheDocument();
   });
 });

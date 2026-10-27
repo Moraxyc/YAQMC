@@ -1,3 +1,4 @@
+import type { PluginReleaseInfo } from './plugin-updates';
 /** DTO mirror seeded from `src/domain/music.ts` and command-facing frontend types. */
 
 /** Profile used by the pre-profile provider API and legacy response decoder. */
@@ -1173,6 +1174,7 @@ export interface PluginScanReport {
 }
 
 export interface PluginRecord {
+  release?: PluginReleaseInfo | null;
   id: string;
   name: string;
   version: string;
@@ -1213,6 +1215,7 @@ export interface ActiveSceneResource {
 }
 
 export interface ActiveScriptResource {
+  packageSha256?: string;
   pluginId: string;
   pluginName?: string;
   source: string;

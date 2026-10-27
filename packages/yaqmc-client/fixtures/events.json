@@ -349,6 +349,21 @@
     },
     "seq": 5
   },
+  "plugin://update-progress": {
+    "channel": "plugin://update-progress",
+    "kind": "event",
+    "payload": {
+      "downloadedBytes": 0,
+      "error": null,
+      "operationId": "operation-0",
+      "phase": "prepared",
+      "pluginId": "example",
+      "preview": null,
+      "runtimeChanged": false,
+      "totalBytes": null
+    },
+    "seq": 6
+  },
   "preferences://changed": {
     "channel": "preferences://changed",
     "kind": "event",

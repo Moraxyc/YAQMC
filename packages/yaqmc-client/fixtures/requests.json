@@ -39,6 +39,13 @@
     "kind": "request",
     "method": "core_ping"
   },
+  "core_shutdown_cancel": {
+    "id": 116,
+    "kind": "request",
+    "method": "core_shutdown_cancel",
+    "origin": "main",
+    "params": {}
+  },
   "core_shutdown_prepare": {
     "id": 11,
     "kind": "request",
@@ -64,6 +71,59 @@
         "includeLogs": true
       }
     }
+  },
+  "host_updater_cancel": {
+    "id": 114,
+    "kind": "request",
+    "method": "host_updater_cancel",
+    "origin": "main",
+    "params": {}
+  },
+  "host_updater_check": {
+    "id": 109,
+    "kind": "request",
+    "method": "host_updater_check",
+    "origin": "main",
+    "params": {}
+  },
+  "host_updater_download": {
+    "id": 110,
+    "kind": "request",
+    "method": "host_updater_download",
+    "origin": "main",
+    "params": {}
+  },
+  "host_updater_install": {
+    "id": 111,
+    "kind": "request",
+    "method": "host_updater_install",
+    "origin": "main",
+    "params": {}
+  },
+  "host_updater_preferences": {
+    "id": 115,
+    "kind": "request",
+    "method": "host_updater_preferences",
+    "origin": "main",
+    "params": {
+      "includePrerelease": true
+    }
+  },
+  "host_updater_start": {
+    "id": 113,
+    "kind": "request",
+    "method": "host_updater_start",
+    "origin": "main",
+    "params": {
+      "candidateId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "host_updater_status": {
+    "id": 112,
+    "kind": "request",
+    "method": "host_updater_status",
+    "origin": "main",
+    "params": {}
   },
   "platform_attach": {
     "id": 10,
@@ -170,6 +230,106 @@
         "grant": [],
         "path": "/tmp/plugin.yaqmc-plugin"
       }
+    }
+  },
+  "plugin_update_apply": {
+    "id": 104,
+    "kind": "request",
+    "method": "plugin_update_apply",
+    "origin": "main",
+    "params": {
+      "request": {
+        "confirm": true,
+        "grant": [],
+        "operationId": "operation-0",
+        "stopUsing": false
+      }
+    }
+  },
+  "plugin_update_cancel": {
+    "id": 106,
+    "kind": "request",
+    "method": "plugin_update_cancel",
+    "origin": "main",
+    "params": {
+      "operationId": "operation-0"
+    }
+  },
+  "plugin_update_check": {
+    "id": 102,
+    "kind": "request",
+    "method": "plugin_update_check",
+    "origin": "main",
+    "params": {
+      "pluginId": "dev.example.update"
+    }
+  },
+  "plugin_update_editing": {
+    "id": 108,
+    "kind": "request",
+    "method": "plugin_update_editing",
+    "origin": "main",
+    "params": {
+      "editing": true,
+      "id": "dev.example.update"
+    }
+  },
+  "plugin_update_policy_get": {
+    "id": 100,
+    "kind": "request",
+    "method": "plugin_update_policy_get",
+    "origin": "main",
+    "params": {
+      "id": "dev.example.update"
+    }
+  },
+  "plugin_update_policy_set": {
+    "id": 101,
+    "kind": "request",
+    "method": "plugin_update_policy_set",
+    "origin": "main",
+    "params": {
+      "request": {
+        "automatic": false,
+        "channel": "stable",
+        "confirmSource": false,
+        "pluginId": "dev.example.update",
+        "sourceId": null
+      }
+    }
+  },
+  "plugin_update_prepare": {
+    "id": 103,
+    "kind": "request",
+    "method": "plugin_update_prepare",
+    "origin": "main",
+    "params": {
+      "request": {
+        "path": "C:/Downloads/example.yaqmc-plugin",
+        "pluginId": "dev.example.update"
+      }
+    }
+  },
+  "plugin_update_runtime_ready": {
+    "id": 107,
+    "kind": "request",
+    "method": "plugin_update_runtime_ready",
+    "origin": "main",
+    "params": {
+      "request": {
+        "operationId": "operation-0",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "stage": "validating"
+      }
+    }
+  },
+  "plugin_update_status": {
+    "id": 105,
+    "kind": "request",
+    "method": "plugin_update_status",
+    "origin": "main",
+    "params": {
+      "operationId": "operation-0"
     }
   },
   "preferences_set_background_from": {

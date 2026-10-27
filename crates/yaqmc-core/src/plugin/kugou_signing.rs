@@ -24,7 +24,7 @@ pub(super) fn apply_credential_query_signing(
         .unwrap_or_default();
     if !matches!(
         scheme,
-        "kugou-android" | "kugou-user-info" | "kugou-cloud-list"
+        "kugou-android" | "kugou-user-info" | "kugou-cloud-list" | "kugou-play-history"
     ) {
         return Err("component credential signing scheme is not supported".to_owned());
     }
@@ -37,8 +37,23 @@ pub(super) fn apply_credential_query_signing(
         .map_err(|_| "component network URL is invalid".to_owned())?;
     let user_info = scheme == "kugou-user-info";
     let cloud_list = scheme == "kugou-cloud-list";
+    let play_history = scheme == "kugou-play-history";
     if !["https://gateway.kugou.com", "https://trackercdn.kugou.com"].contains(&origin.as_str())
-        || (!user_info && !cloud_list && method != "GET")
+        || (!user_info && !cloud_list && !play_history && method != "GET")
+        || (play_history
+            && (origin != "https://gateway.kugou.com"
+                || method != "POST"
+                || url.path() != "/playhistory/v1/get_songs"
+                || payload
+                    .get("headers")
+                    .and_then(Value::as_object)
+                    .is_some_and(|headers| {
+                        headers
+                            .keys()
+                            .any(|key| key.eq_ignore_ascii_case("x-router"))
+                    })
+                || payload.get("body").and_then(Value::as_str).is_none()
+                || payload.get("credentialBodyFields").is_some()))
         || (cloud_list
             && (origin != "https://gateway.kugou.com"
                 || method != "POST"
@@ -136,6 +151,8 @@ pub(super) fn apply_credential_query_signing(
             .and_then(Value::as_str)
             .ok_or_else(|| "component cloud-list body is required".to_owned())?;
         cloud_list_body(raw, url.path(), token, userid)?
+    } else if play_history {
+        play_history_body(payload["body"].as_str().unwrap_or_default(), token, userid)?
     } else {
         String::new()
     };
@@ -164,11 +181,39 @@ pub(super) fn apply_credential_query_signing(
     params.insert("signature".to_owned(), md5_hex(&signed));
     url.query_pairs_mut().clear().extend_pairs(params);
     payload["url"] = Value::String(url.to_string());
-    if user_info || cloud_list {
+    if user_info || cloud_list || play_history {
         payload["body"] = Value::String(body);
         payload["headers"]["content-type"] = Value::String("application/json".to_owned());
     }
     Ok(())
+}
+
+fn play_history_body(raw: &str, token: &str, userid: &str) -> Result<String, String> {
+    if raw.len() > 4096 {
+        return Err("component play-history body is too large".to_owned());
+    }
+    let mut body: Value = serde_json::from_str(raw)
+        .map_err(|_| "component play-history body is invalid".to_owned())?;
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| "component play-history body must be an object".to_owned())?;
+    if object
+        .keys()
+        .any(|key| !["source_classify", "to_subdivide_sr", "bp"].contains(&key.as_str()))
+        || object.get("source_classify").and_then(Value::as_str) != Some("app")
+        || object.get("to_subdivide_sr").and_then(Value::as_u64) != Some(1)
+        || object.get("bp").is_some_and(|bp| {
+            !bp.as_str().is_some_and(|s| {
+                !s.is_empty() && s.len() <= 1024 && !s.chars().any(char::is_control)
+            })
+        })
+    {
+        return Err("component play-history parameters are invalid".to_owned());
+    }
+    object.insert("token".to_owned(), Value::String(token.to_owned()));
+    object.insert("userid".to_owned(), Value::String(userid.to_owned()));
+    serde_json::to_string(&body)
+        .map_err(|_| "component play-history body could not be encoded".to_owned())
 }
 
 fn cloud_list_body(raw: &str, path: &str, token: &str, userid: &str) -> Result<String, String> {
@@ -303,6 +348,91 @@ mod tests {
             "credentialHeaders": [{"name": "cookie", "handle": handle}],
             "credentialQuerySigning": {"scheme": "kugou-cloud-list", "handle": handle}
         })
+    }
+
+    fn play_history_payload(handle: &str) -> Value {
+        json!({
+            "method": "POST",
+            "url": "https://gateway.kugou.com/playhistory/v1/get_songs?appid=1005&clienttime=1700000000&mid=1234",
+            "headers": {},
+            "body": "{\"source_classify\":\"app\",\"to_subdivide_sr\":1,\"bp\":\"page-2\"}",
+            "credentialHeaders": [{"name": "cookie", "handle": handle}],
+            "credentialQuerySigning": {"scheme": "kugou-play-history", "handle": handle}
+        })
+    }
+
+    #[tokio::test]
+    async fn play_history_signing_is_read_only_and_binds_body_and_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let services = ComponentHostServices::open(
+            root.path().join("data"),
+            root.path().join("cache"),
+            Arc::new(MemoryCredentialStore::default()),
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let origin = "https://gateway.kugou.com";
+        let allowed = HashSet::from([origin.to_owned(), "https://trackercdn.kugou.com".to_owned()]);
+        let host = services.for_plugin("test.music", "test.music.kugou", allowed.clone());
+        let other = services.for_plugin("test.other", "test.other.kugou", allowed);
+        let handle = host
+            .credential_create(origin, "token=synthetic-token; userid=42")
+            .unwrap();
+        let mut request = play_history_payload(&handle);
+        apply_credential_query_signing(&host, true, &mut request).unwrap();
+        let body: Value = serde_json::from_str(request["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["token"], "synthetic-token");
+        assert_eq!(body["userid"], "42");
+        assert_eq!(body["bp"], "page-2");
+        let url = reqwest::Url::parse(request["url"].as_str().unwrap()).unwrap();
+        let params: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+        let mut signed = "OIlwieks28dk2k092lksi2UIkp".to_owned();
+        for (key, value) in params.iter().filter(|(key, _)| key.as_str() != "signature") {
+            signed.push_str(&format!("{key}={value}"));
+        }
+        signed.push_str(request["body"].as_str().unwrap());
+        signed.push_str("OIlwieks28dk2k092lksi2UIkp");
+        assert_eq!(params["signature"], md5_hex(&signed));
+        assert!(
+            apply_credential_query_signing(&host, false, &mut play_history_payload(&handle))
+                .is_err()
+        );
+        assert!(
+            apply_credential_query_signing(&other, true, &mut play_history_payload(&handle))
+                .is_err()
+        );
+        for (field, value) in [
+            ("method", json!("GET")),
+            (
+                "url",
+                json!("https://gateway.kugou.com/playhistory/v1/upload_songs?appid=1005"),
+            ),
+            (
+                "url",
+                json!("https://trackercdn.kugou.com/playhistory/v1/get_songs?appid=1005"),
+            ),
+            ("headers", json!({"x-router":"other.kugou.com"})),
+            ("headers", json!({"X-Router":"other.kugou.com"})),
+            (
+                "body",
+                json!("{\"source_classify\":\"app\",\"to_subdivide_sr\":1,\"token\":\"forged\"}"),
+            ),
+            (
+                "body",
+                json!("{\"source_classify\":\"app\",\"to_subdivide_sr\":1,\"bp\":3}"),
+            ),
+            ("credentialHeaders", json!([])),
+            ("credentialBodyFields", json!([])),
+        ] {
+            let mut invalid = play_history_payload(&handle);
+            invalid[field] = value;
+            let original = invalid.clone();
+            assert!(
+                apply_credential_query_signing(&host, true, &mut invalid).is_err(),
+                "{field}"
+            );
+            assert_eq!(invalid, original);
+        }
     }
 
     #[tokio::test]

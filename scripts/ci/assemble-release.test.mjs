@@ -43,6 +43,9 @@ test('full desktop releases require all architectures, installers, portable pack
         'fixture',
       );
     }
+    if (target.os === 'windows') {
+      writeFileSync(path.join(directory, `updater-windows-${target.arch}.yml`), 'fixture');
+    }
   }
   assert.doesNotThrow(() => verifyDesktopReleaseTargets(source, commit));
   assert.throws(() => verifyDesktopReleaseTargets(source, 'b'.repeat(40)), /Missing/u);

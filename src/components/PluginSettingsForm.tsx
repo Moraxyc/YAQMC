@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { pluginSettingsGet, pluginSettingsSet } from '../application/plugin-runtime';
+import { getYaqmcClient } from '../application/yaqmc-runtime';
 
 interface SettingsField {
   id: string;
@@ -22,6 +23,14 @@ export function PluginSettingsForm({ pluginId, schema }: { pluginId: string; sch
 
   useEffect(() => {
     let active = true;
+    const editing = (value: boolean) =>
+      getYaqmcClient()
+        .invoke('plugin_update_editing', { id: pluginId, editing: value })
+        .catch(() => undefined);
+    void editing(true);
+    const lease = setInterval(() => {
+      void editing(true);
+    }, 15000);
     void pluginSettingsGet(pluginId)
       .then((next) => {
         if (active) setValues(next);
@@ -31,6 +40,8 @@ export function PluginSettingsForm({ pluginId, schema }: { pluginId: string; sch
       });
     return () => {
       active = false;
+      clearInterval(lease);
+      void editing(false);
     };
   }, [pluginId]);
 

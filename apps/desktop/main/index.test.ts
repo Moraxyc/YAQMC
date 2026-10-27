@@ -181,7 +181,7 @@ describe('host boot wiring', () => {
     expect(source).not.toContain(['--', 'no-sandbox'].join(''));
   });
 
-  it('shows the renderer before waiting for Core startup and skips portable launch updates', () => {
+  it('shows the renderer before Core startup and schedules release checks outside QA builds', () => {
     const boot = source.slice(
       source.indexOf('app.whenReady()'),
       source.indexOf("app.on('before-quit'"),
@@ -190,7 +190,8 @@ describe('host boot wiring', () => {
     expect(boot.indexOf('createMainWindow(root);')).toBeLessThan(
       boot.indexOf('await startSupervisor();'),
     );
-    expect(boot).toContain('!process.env.PORTABLE_EXECUTABLE_FILE');
+    expect(boot).toContain('if (!__YAQMC_QA_BUILD__)');
+    expect(boot).not.toContain('!process.env.PORTABLE_EXECUTABLE_FILE');
   });
 
   it('restores lyric surface geometry after core ready using BASE-04 keys', () => {

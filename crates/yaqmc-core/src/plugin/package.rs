@@ -86,9 +86,20 @@ pub fn inspect_package(path: &Path) -> Result<PackageInspection, PackageError> {
     if metadata.len() > COMPONENT_MAX_COMPRESSED_BYTES {
         return Err(PackageError::Oversize);
     }
-    let sha256 = sha256_file(path)?;
-    let file = File::open(path).map_err(|_| PackageError::Unreadable)?;
-    let mut archive = ZipArchive::new(file).map_err(|_| PackageError::Unreadable)?;
+    // Hash and inspect the same bounded snapshot. Reopening the original path
+    // after hashing would allow an unreviewed archive to acquire a trusted hash.
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|_| PackageError::Unreadable)?
+        .take(COMPONENT_MAX_COMPRESSED_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| PackageError::Unreadable)?;
+    if bytes.len() as u64 > COMPONENT_MAX_COMPRESSED_BYTES {
+        return Err(PackageError::Oversize);
+    }
+    let sha256 = sha256_bytes(&bytes);
+    let mut archive =
+        ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|_| PackageError::Unreadable)?;
     if archive.len() > COMPONENT_MAX_FILE_COUNT {
         return Err(PackageError::Oversize);
     }
@@ -203,7 +214,8 @@ pub fn inspect_directory(root: &Path) -> Result<PackageInspection, PackageError>
     if files.len() > COMPONENT_MAX_FILE_COUNT {
         return Err(PackageError::Oversize);
     }
-    finish_inspection(files, sha256_directory(root)?, expanded)
+    let digest = content_sha256(&files);
+    finish_inspection(files, digest, expanded)
 }
 
 pub fn stale_typescript_message(files: &[PackageFile]) -> Option<String> {
@@ -282,16 +294,17 @@ fn collect_directory(
     Ok(())
 }
 
-fn sha256_directory(root: &Path) -> Result<String, PackageError> {
+pub fn content_sha256(files: &[PackageFile]) -> String {
+    let mut ordered = files.iter().collect::<Vec<_>>();
+    ordered.sort_by(|a, b| a.path.cmp(&b.path));
     let mut hasher = Sha256::new();
-    hasher.update(root.to_string_lossy().as_bytes());
-    let metadata = fs::metadata(root).map_err(|_| PackageError::Unreadable)?;
-    if let Ok(modified) = metadata.modified() {
-        if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
-            hasher.update(duration.as_secs().to_le_bytes());
-        }
+    for file in ordered {
+        hasher.update((file.path.len() as u64).to_le_bytes());
+        hasher.update(file.path.as_bytes());
+        hasher.update((file.bytes.len() as u64).to_le_bytes());
+        hasher.update(&file.bytes);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    format!("{:x}", hasher.finalize())
 }
 
 fn finish_inspection(

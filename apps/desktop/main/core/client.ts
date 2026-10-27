@@ -13,6 +13,7 @@ export const STANDARD_TIMEOUT_MS = 30_000;
 export const LONG_TIMEOUT_MS = 120_000;
 
 const LONG_METHODS = new Set([
+  'core_shutdown_prepare',
   'plugin_install',
   'plugin_install_from',
   'plugin_install_unpacked',

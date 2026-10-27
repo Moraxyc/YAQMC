@@ -6,6 +6,7 @@ pub const CHANNEL_API_EVENT: &str = "api://event";
 pub const CHANNEL_PLAYER_SNAPSHOT: &str = "player://snapshot";
 pub const CHANNEL_LYRICS_PROJECTION: &str = "lyrics://projection";
 pub const CHANNEL_LYRICS_DOCUMENT: &str = "lyrics://document";
+pub const CHANNEL_PLUGIN_UPDATE_PROGRESS: &str = "plugin://update-progress";
 pub const CHANNEL_PLUGIN_CHANGED: &str = "plugin://changed";
 pub const CHANNEL_PREFERENCES_CHANGED: &str = "preferences://changed";
 pub const CHANNEL_LYRICS_SURFACE_CLOSED: &str = "lyrics://surface-closed";
@@ -26,6 +27,7 @@ pub const CORE_EVENT_CHANNELS: &[&str] = &[
     CHANNEL_LYRICS_PROJECTION,
     CHANNEL_LYRICS_DOCUMENT,
     CHANNEL_PLUGIN_CHANGED,
+    CHANNEL_PLUGIN_UPDATE_PROGRESS,
     CHANNEL_PREFERENCES_CHANGED,
     CHANNEL_HOST_COMMAND,
     CHANNEL_CORE_LOG,

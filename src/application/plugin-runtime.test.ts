@@ -104,7 +104,10 @@ describe('plugin runtime isolation', () => {
 
   it('records resource startup failures instead of leaking unhandled rejections', async () => {
     const error = new Error('Core unavailable');
-    invokeMock.mockRejectedValueOnce(error);
+    invokeMock.mockImplementation(async (method: string) => {
+      if (method === 'plugin_active_resources') throw error;
+      return [];
+    });
     const { unmount } = renderHook(() => usePluginHost());
     await waitFor(() => {
       expect(logErrorMock).toHaveBeenCalledWith('plugin.resources.load_failed', error);

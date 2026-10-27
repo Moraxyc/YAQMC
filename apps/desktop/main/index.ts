@@ -1,3 +1,4 @@
+import { cancelProviderOAuthWindows } from './windows/oauth-window';
 import {
   app,
   BrowserWindow,
@@ -67,6 +68,16 @@ import { mergeChromiumFeatureList, windowsOcclusionSwitches } from './windows/wi
 import { OVERLAY_VISUAL_DOCUMENT_GUARD } from './windows/surface-visual-document';
 import { createElectronUpdaterPort, noopUpdaterPort } from './services/electron-updater-port';
 import { createUpdater, type UpdaterHandle } from './services/updater';
+import { packageKind, type BuildIdentity } from './services/release-catalog';
+import { readUpdatePreferences, writeUpdatePreferences } from './services/update-preferences';
+import {
+  atomicUpdateJson,
+  launchNativeUpdate,
+  nativeUpdateHealth,
+  nativeUpdateResult,
+  recoverNativeUpdate,
+  nsisUpdateResult,
+} from './services/native-update';
 import { APP_SCHEME, appIndexUrl, serveAppUrl } from './protocol';
 import { applyAppWindowGuards, applySessionSecurity, VITE_DEV_ORIGIN } from './security';
 import { createGlobalShortcutSession } from './services/shortcuts';
@@ -254,6 +265,8 @@ let uiPerfDiagStarted = false;
 let uiPerfMainLoaded = false;
 let uiPerfCoreReady = false;
 let deepLinkRendererReady = false;
+let rendererHealthProbe = false;
+let updateShutdownStarted = false;
 let preferencesResolvedForDeepLinks = !app.isPackaged;
 const deepLinkInbox = new DeepLinkInbox(deepLinkFromArgv(process.argv));
 const deepLinkRegistration = registerYaqmcDeepLinkProtocol(app, {
@@ -506,10 +519,31 @@ const hostHandlers = createHostHandlers({
     check: () => requireUpdater().check(),
     download: () => requireUpdater().download(),
     install: () => requireUpdater().install(),
+    start: (candidateId) => requireUpdater().start(candidateId),
+    status: async () => {
+      const status = requireUpdater().payload();
+      const result =
+        updateIdentity.source === 'official-release'
+          ? await (
+              updateIdentity.packageKind === 'nsis'
+                ? nsisUpdateResult(appUpdateRoot, app.getVersion())
+                : nativeUpdateResult(appUpdateRoot)
+            ).catch(() => undefined)
+          : undefined;
+      return status.state === 'idle' && result ? { ...status, ...result } : status;
+    },
+    cancel: () => requireUpdater().cancel(),
+    preferences: (value) => requireUpdater().preferences(value),
   },
   windowChrome: hostWindowChrome,
   // host.coreStatus: renderer markReady probe if it missed host://core-status.
-  coreStatus: () => ({ status: supervisor?.status ?? 'down' }),
+  coreStatus: () => {
+    rendererHealthProbe = true;
+    if (supervisor?.status === 'ready' || supervisor?.status === 'safe-mode') {
+      void confirmNativeUpdateHealth(true).catch((error) => writeHostLog(String(error)));
+    }
+    return { status: supervisor?.status ?? 'down' };
+  },
 });
 
 const router = new IpcRouter({
@@ -520,18 +554,114 @@ const router = new IpcRouter({
   hostHandlers,
 });
 
+const appUpdateRoot = path.join(coreDataPaths().cacheDir, 'app-updates');
+const updatePreferencesFile = path.join(coreDataPaths().configDir, 'app-updater.json');
+const updateIdentity: BuildIdentity = {
+  source:
+    __YAQMC_BUILD_SOURCE__ === 'official-release' &&
+    __YAQMC_RELEASE_TAG__ === `v${app.getVersion()}` &&
+    __YAQMC_BUILD_ARCH__ === process.arch
+      ? 'official-release'
+      : 'source',
+  commit: __YAQMC_BUILD_COMMIT__,
+  tag: __YAQMC_RELEASE_TAG__,
+  architecture: process.arch,
+  packageKind: packageKind({
+    platform: process.platform,
+    packaged: app.isPackaged,
+    env: process.env,
+    hasInstallerIdentity: existsSync(
+      path.join(path.dirname(app.getPath('exe')), 'Uninstall YAQMC.exe'),
+    ),
+    executablePath: app.getPath('exe'),
+  }),
+};
+function nativeUpdateTarget(): string | undefined {
+  if (!app.isPackaged || updateIdentity.source !== 'official-release') return;
+  return updateIdentity.packageKind === 'portable'
+    ? process.env.PORTABLE_EXECUTABLE_FILE
+    : updateIdentity.packageKind === 'AppImage'
+      ? process.env.APPIMAGE
+      : undefined;
+}
+async function confirmNativeUpdateHealth(healthy: boolean) {
+  const target = nativeUpdateTarget();
+  if (target) await nativeUpdateHealth(appUpdateRoot, app.getVersion(), healthy, target);
+}
 const updaterHandle = createUpdater({
   port:
     __YAQMC_QA_BUILD__ && smoke
       ? noopUpdaterPort()
-      : createElectronUpdaterPort(updaterReleaseChannel()),
+      : createElectronUpdaterPort({
+          currentVersion: app.getVersion(),
+          identity: updateIdentity,
+          fetcher: (url, init) =>
+            session.fromPartition('yaqmc-app-updater', { cache: false }).fetch(url, init),
+          directory: path.join(appUpdateRoot, 'downloads'),
+          beforeNsisInstall: (candidate) =>
+            atomicUpdateJson(path.join(appUpdateRoot, 'nsis-pending.json'), {
+              version: candidate.version,
+              oldVersion: app.getVersion(),
+              candidateId: candidate.id,
+            }),
+          installNative: (candidate, file) =>
+            launchNativeUpdate({
+              root: appUpdateRoot,
+              helper: path.join(
+                process.resourcesPath,
+                'updater',
+                process.platform === 'win32' ? 'yaqmc-update-helper.exe' : 'yaqmc-update-helper',
+              ),
+              target:
+                updateIdentity.packageKind === 'portable'
+                  ? (process.env.PORTABLE_EXECUTABLE_FILE ?? '')
+                  : (process.env.APPIMAGE ?? ''),
+              candidate,
+              package: file,
+              quit: () => {
+                stopping = true;
+                app.quit();
+              },
+            }),
+        }),
   emit: (channel, payload) => {
     writeHostLog(`updater ${payload.state}`);
     fanoutEvent(channel, payload);
   },
   channel: updaterReleaseChannel(),
+  currentVersion: app.getVersion(),
+  identity: updateIdentity,
+  ...readUpdatePreferences(updatePreferencesFile),
+  persistPreferences: (value) => writeUpdatePreferences(updatePreferencesFile, value),
+  prepareInstall: async () => {
+    if (!supervisor?.client) throw new Error('update-core-unavailable');
+    await supervisor.client.invoke('core_shutdown_prepare');
+    updateShutdownStarted = true;
+    await supervisor.stopForUpdate();
+    supervisor = undefined;
+    router.setClient(undefined);
+    stopping = true;
+  },
+  installationFailed: async () => {
+    stopping = false;
+    if (!updateShutdownStarted && supervisor) {
+      try {
+        await supervisor.client.invoke('core_shutdown_cancel');
+        return;
+      } catch {
+        // Core may already have exited while preparing; restore it below.
+      }
+    }
+    if (supervisor) {
+      await supervisor.stop();
+      supervisor = undefined;
+      router.setClient(undefined);
+    }
+    updateShutdownStarted = false;
+    await startSupervisor();
+  },
   platform: process.platform,
-  scheduleCheck: (callback, delayMs) => setTimeout(callback, delayMs),
+  scheduleCheck: (callback, delayMs) => setTimeout(callback, delayMs).unref(),
 });
 
 function packagedRendererRoot(): string | undefined {
@@ -1016,6 +1146,11 @@ function fanoutEvent(channel: string, payload: unknown): void {
 
 function bindCoreEvents(): void {
   supervisor?.client.on('event', (frame: { channel: string; payload: unknown }) => {
+    if (frame.channel === 'plugin://update-progress') {
+      const operation = frame.payload as { phase?: string; preview?: { providerIds?: string[] } };
+      if (operation.phase === 'quiescing')
+        cancelProviderOAuthWindows(operation.preview?.providerIds ?? []);
+    }
     fanoutEvent(frame.channel, frame.payload);
   });
 }
@@ -1117,7 +1252,9 @@ function startSupervisor(): Promise<void> {
     extraEnv: qaSandbox ? coreTempEnv(qaSandbox) : undefined,
   });
   attachSupervisor(supervisor);
-  return supervisor.start().then(() => undefined);
+  return supervisor.start().then(async () => {
+    if (rendererHealthProbe) await confirmNativeUpdateHealth(true);
+  });
 }
 
 function applyTrayLabelsFromPreferences(raw: unknown): void {
@@ -1205,6 +1342,21 @@ if (
   )
 ) {
   app.whenReady().then(async () => {
+    await confirmNativeUpdateHealth(false);
+    const nativeTarget = nativeUpdateTarget();
+    if (nativeTarget)
+      await recoverNativeUpdate(
+        appUpdateRoot,
+        path.join(
+          process.resourcesPath,
+          'updater',
+          process.platform === 'win32' ? 'yaqmc-update-helper.exe' : 'yaqmc-update-helper',
+        ),
+        nativeTarget,
+      );
+    const updateResult = await nativeUpdateResult(appUpdateRoot);
+    if (updateResult)
+      writeHostLog(`application update ${updateResult.state}: ${updateResult.error ?? ''}`);
     applySessionSecurity(session.defaultSession);
     const root = rendererRoot();
     protocol.handle(APP_SCHEME, async (request) => {
@@ -1225,7 +1377,7 @@ if (
     }
     sendPlatformAttach();
     installTrayAndShortcuts();
-    if (!(__YAQMC_QA_BUILD__ && smoke) && app.isPackaged && !process.env.PORTABLE_EXECUTABLE_FILE) {
+    if (!__YAQMC_QA_BUILD__) {
       updaterHandle?.scheduleLaunchCheck();
     }
     if (__YAQMC_QA_BUILD__ && smoke && mainWindow) {

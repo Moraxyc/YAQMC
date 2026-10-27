@@ -90,6 +90,7 @@ pub struct AccountPlaylistDetail {
 #[serde(rename_all = "kebab-case")]
 pub enum RemotePlayHistorySource {
     QqmusicAccount,
+    ProviderAccount,
     LocalPlayback,
 }
 

@@ -49,6 +49,15 @@ Host 缓存配方，不含媒体 URL、请求 header、凭据值或文件系统�
 
 ## 兼容与生命周期
 
+`network.request` 的 JSON 信封在 `responseFormat` 为 `json` 时可指定 `responseJsonFields`：1–128 个不重复、
+非空且不含控制字符的字段名，每个最长 64 个 UTF-8 字节。成功的 JSON 响应会在返回 `bodyJson` 前递归保留这些
+对象字段，数组顺序和标量值保持原样，保留的嵌套深度最多 64 层。省略此项时返回完整响应；错误正文沿用原有行为。
+网络权限、响应字节上限和 Component 执行上限仍然有效。
+
+账号快照的 `revision` 与账号分页的 `authRevision` 使用同一个 Host 账号代次。读取未变化的快照不会递增；账号状态、
+身份、能力及显式登录/会话切换可以推进代次。远端播放历史可使用 `source: "provider-account"`，既有提供器的
+`qqmusic-account` 仍然有效。
+
 manifest v1 / API v1-v2 包继续使用原有 Worker、样式、Scene、存储和 UI 契约；它们不选择 WIT world，也不能取得 API v3
 Provider 权限。manifest v2 包只能包含一个 Component，不能混入旧版入口。
 

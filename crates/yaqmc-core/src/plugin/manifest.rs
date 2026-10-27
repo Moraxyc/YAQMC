@@ -25,6 +25,8 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<crate::plugin::updates::ReleaseInfo>,
     pub api_version: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<String>,
@@ -163,6 +165,8 @@ impl ProviderWorld {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderPluginManifest {
     pub id: String,
+    #[serde(default = "default_session_schema")]
+    pub session_schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub wit_version: String,
@@ -170,6 +174,10 @@ pub struct ProviderPluginManifest {
     pub capabilities: Vec<ProviderCapability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
+}
+
+fn default_session_schema() -> u32 {
+    1
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,6 +247,13 @@ impl PluginManifest {
         if parse_semver(&self.version).is_none() {
             return Err(ManifestError::InvalidVersion);
         }
+        if self
+            .release
+            .as_ref()
+            .is_some_and(|release| !release.valid())
+        {
+            return Err(ManifestError::InvalidVersion);
+        }
         if self.name.trim().is_empty() || self.name.len() > 80 {
             return Err(ManifestError::InvalidId);
         }
@@ -295,6 +310,7 @@ impl PluginManifest {
         let requested = self.requested_permissions();
         for provider in providers {
             if !is_plugin_id(&provider.id)
+                || provider.session_schema_version == 0
                 || !provider_ids.insert(provider.id.as_str())
                 || provider
                     .name

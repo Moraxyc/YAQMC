@@ -214,6 +214,12 @@ export async function openOAuthWindow(
   }
 }
 
+const providerLoginWindows = new Map<string, Set<() => void>>();
+
+export function cancelProviderOAuthWindows(providerIds: readonly string[]): void {
+  for (const id of providerIds) for (const cancel of providerLoginWindows.get(id) ?? []) cancel();
+}
+
 export async function openProviderOAuthWindow(
   input: { providerId: string; methodId: string },
   deps: ProviderOAuthWindowDeps,
@@ -235,6 +241,19 @@ export async function openProviderOAuthWindow(
     const guards = prepared.browserSession
       ? attachBrowserSessionGuards(window, session, input.providerId, prepared, deps)
       : attachProviderOAuthWindowGuards(window, input.providerId, prepared, deps);
+    const targetWindow = window;
+    const cancel = () => {
+      guards.fail(new Error('Plugin update cancelled this sign-in'));
+      targetWindow.close();
+    };
+    const active = providerLoginWindows.get(input.providerId) ?? new Set<() => void>();
+    active.add(cancel);
+    providerLoginWindows.set(input.providerId, active);
+    const cleanup = () => {
+      active.delete(cancel);
+      if (active.size === 0) providerLoginWindows.delete(input.providerId);
+    };
+    void guards.completion.then(cleanup, cleanup);
     try {
       void Promise.resolve(window.loadURL(prepared.url)).catch(guards.fail);
     } catch (error) {

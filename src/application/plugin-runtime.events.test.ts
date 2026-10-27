@@ -13,6 +13,7 @@ import {
   PLUGIN_EVENT_PERMISSIONS,
   setPluginEnabled,
   usePluginHost,
+  handlePluginUpdateProgress,
 } from './plugin-runtime';
 import { usePlayerStore } from './player-store';
 
@@ -160,6 +161,67 @@ describe('PLUG-07 plugin event fan-out permissions', () => {
     logErrorMock.mockReset();
   });
 
+  it('updates one worker, preserves the other, and does not reactivate the committed worker', async () => {
+    const { unmount } = renderHook(() => usePluginHost());
+    await waitFor(() => expect(FakeWorker.instances).toHaveLength(2));
+    const old = instanceAt(0);
+    const other = instanceAt(1);
+    const operation = {
+      operationId: 'targeted-update',
+      pluginId: GRANTED,
+      phase: 'quiescing',
+      runtimeChanged: true,
+      downloadedBytes: 0,
+      totalBytes: null,
+      error: null,
+      preview: {
+        pluginId: GRANTED,
+        providerIds: [],
+        name: GRANTED,
+        currentVersion: '1.0.0',
+        expectedGeneration: 1,
+        version: '1.1.0',
+        currentSha256: 'a'.repeat(64),
+        sha256: 'b'.repeat(64),
+        release: null,
+        permissions: [],
+        grantedPermissions: [],
+        addedPermissions: [],
+        removedPermissions: [],
+        sessionChanges: [],
+        confirmations: [],
+        trustedSource: null,
+        enabled: true,
+        needsRenderer: true,
+        hasScript: true,
+      },
+    };
+    await handlePluginUpdateProgress(operation);
+    expect(old.terminated).toBe(true);
+    expect(other.terminated).toBe(false);
+    const validating = handlePluginUpdateProgress({ ...operation, phase: 'validating' });
+    await waitFor(() => expect(FakeWorker.instances).toHaveLength(3));
+    const candidate = instanceAt(2);
+    candidate.onmessage?.({ data: { type: 'yaqmc/ready' } } as MessageEvent);
+    await validating;
+    await handlePluginUpdateProgress({ ...operation, phase: 'completed' });
+    await applyPluginResources();
+    expect(FakeWorker.instances).toHaveLength(3);
+    expect(candidate.terminated).toBe(false);
+    expect(other.terminated).toBe(false);
+    await handlePluginUpdateProgress({
+      ...operation,
+      operationId: 'bad-prepare',
+      phase: 'failed',
+      runtimeChanged: false,
+    });
+    expect(candidate.terminated).toBe(false);
+    expect(invokeMock).toHaveBeenCalledWith('plugin_update_runtime_ready', {
+      request: { operationId: 'targeted-update', sha256: 'b'.repeat(64), stage: 'validating' },
+    });
+    unmount();
+  });
+
   it('declares a permission for every broadcast site in the runtime source', () => {
     const source = readFileSync(
       path.join(
@@ -253,7 +315,8 @@ describe('PLUG-07 plugin event fan-out permissions', () => {
 
     grants = {};
     await setPluginEnabled(GRANTED, true, []);
-    await waitFor(() => expect(FakeWorker.instances).toHaveLength(4));
+    await waitFor(() => expect(FakeWorker.instances).toHaveLength(3));
+    expect(instanceAt(1).terminated).toBe(false);
 
     expect(firstGranted.terminated).toBe(true);
     const restartedGranted = instanceAt(2);

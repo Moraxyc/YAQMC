@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import * as esbuild from 'esbuild';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyReleaseBundle } from '../../../scripts/ci/verify-release-bundle.mjs';
+import { officialBuildIdentity } from './build-identity.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const watch = process.argv.includes('--watch');
@@ -28,11 +29,18 @@ function currentCommit() {
 
 function buildDefines() {
   const buildType = watch ? 'development' : qa ? 'qa' : 'release';
+  const identity = officialBuildIdentity(
+    process.env,
+    JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version,
+  );
   return {
     __YAQMC_BUILD_COMMIT__: JSON.stringify(currentCommit()),
     __YAQMC_RELEASE_CHANNEL__: JSON.stringify(process.env.YAQMC_RELEASE_CHANNEL ?? 'development'),
     __YAQMC_BUILD_TYPE__: JSON.stringify(buildType),
     __YAQMC_QA_BUILD__: JSON.stringify(qa),
+    __YAQMC_BUILD_SOURCE__: JSON.stringify(qa ? 'source' : identity.source),
+    __YAQMC_RELEASE_TAG__: JSON.stringify(identity.tag),
+    __YAQMC_BUILD_ARCH__: JSON.stringify(identity.architecture),
   };
 }
 

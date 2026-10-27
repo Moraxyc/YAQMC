@@ -7,6 +7,67 @@
  * isolated worker; it does not compile TypeScript at runtime.
  */
 
+/** Optional manifest release metadata. Build IDs do not affect SemVer ordering. */
+export interface PluginReleaseInfo {
+  channel: 'stable' | 'beta' | 'nightly';
+  buildId: string;
+  /** Positive, monotonically increasing safe integer across all channels. */
+  releaseSequence: number;
+}
+
+export interface PluginProviderManifest {
+  id: string;
+  name?: string;
+  witVersion: string;
+  world:
+    | 'provider'
+    | 'provider-storage'
+    | 'provider-network'
+    | 'provider-network-storage'
+    | 'provider-account';
+  capabilities: Array<
+    | 'provider.catalog'
+    | 'provider.playback'
+    | 'provider.recommendation'
+    | 'provider.lyrics'
+    | 'provider.comments'
+    | 'provider.account'
+  >;
+  platform?: string;
+  /** Defaults to 1. Increment when saved sessions cannot be reused safely. */
+  sessionSchemaVersion?: number;
+}
+
+export interface PluginManifest {
+  manifestVersion: number;
+  apiVersion: number;
+  id: string;
+  name: string;
+  version: string;
+  release?: PluginReleaseInfo;
+  description?: string;
+  authors?: string[];
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  engines?: { yaqmc?: string };
+  platforms?: string[];
+  architectures?: string[];
+  entrypoints?: { styles?: string[]; scenes?: string[]; script?: string; component?: string };
+  provider?: PluginProviderManifest;
+  providers?: PluginProviderManifest[];
+  federations?: Array<{
+    id: string;
+    name?: string;
+    members?: string[];
+    includeDefaultProvider?: boolean;
+  }>;
+  permissions?: string[];
+  dependencies?: Record<string, string>;
+  conflicts?: string[];
+  settingsSchema?: unknown;
+}
+
 export type PluginPermission =
   | 'track.read'
   | 'lyrics.read'
@@ -202,7 +263,7 @@ export interface PluginContext {
 }
 
 export interface PluginDefinition {
-  activate(ctx: PluginContext): void | (() => void);
+  activate(ctx: PluginContext): void | (() => void) | Promise<void | (() => void)>;
 }
 
 export function definePlugin(definition: PluginDefinition): PluginDefinition {

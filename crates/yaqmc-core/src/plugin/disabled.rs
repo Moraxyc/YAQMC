@@ -10,4 +10,6 @@ impl ExtensionHost {
     pub async fn restore_provider_accounts(&self) {}
 
     pub fn mark_clean_exit(&self) {}
+    pub async fn prepare_app_restart(&self) -> Result<(), String> { Ok(()) }
+    pub fn cancel_app_restart(&self) {}
 }

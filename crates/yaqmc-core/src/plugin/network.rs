@@ -269,6 +269,7 @@ async fn proxy_request_with(
     resolver: &dyn AddressResolver,
     transport: &dyn NetworkTransport,
 ) -> Result<Value, String> {
+    let response_fields = component_response_json_fields(payload)?;
     let response_limit = if payload.get("responseFormat").and_then(Value::as_str) == Some("image") {
         response_limit.min(MAX_COMPONENT_IMAGE_BYTES)
     } else {
@@ -302,7 +303,10 @@ async fn proxy_request_with(
     if (200..300).contains(&response.status)
         && payload.get("responseFormat").and_then(Value::as_str) == Some("json")
     {
-        if let Ok(body) = serde_json::from_slice::<Value>(&response.body) {
+        if let Ok(mut body) = serde_json::from_slice::<Value>(&response.body) {
+            if let Some(fields) = &response_fields {
+                retain_component_json_fields(&mut body, fields, 0)?;
+            }
             output["bodyJson"] = body;
             if let Some(fields) = output.as_object_mut() {
                 fields.remove("body");
@@ -310,6 +314,58 @@ async fn proxy_request_with(
         }
     }
     Ok(output)
+}
+
+fn component_response_json_fields(payload: &Value) -> Result<Option<HashSet<String>>, String> {
+    let Some(value) = payload.get("responseJsonFields") else {
+        return Ok(None);
+    };
+    let invalid = || "component JSON response fields are invalid".to_owned();
+    if payload.get("responseFormat").and_then(Value::as_str) != Some("json") {
+        return Err(invalid());
+    }
+    let values = value
+        .as_array()
+        .filter(|values| !values.is_empty() && values.len() <= 128)
+        .ok_or_else(invalid)?;
+    let mut fields = HashSet::new();
+    for value in values {
+        let name = value
+            .as_str()
+            .filter(|name| {
+                !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control)
+            })
+            .ok_or_else(invalid)?;
+        if !fields.insert(name.to_owned()) {
+            return Err(invalid());
+        }
+    }
+    Ok(Some(fields))
+}
+
+fn retain_component_json_fields(
+    value: &mut Value,
+    fields: &HashSet<String>,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > 64 {
+        return Err("component JSON response is too deeply nested".to_owned());
+    }
+    match value {
+        Value::Object(object) => {
+            object.retain(|key, _| fields.contains(key));
+            for value in object.values_mut() {
+                retain_component_json_fields(value, fields, depth + 1)?;
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                retain_component_json_fields(value, fields, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn component_image_data_uri(bytes: &[u8], content_type: Option<&str>) -> Result<String, String> {
@@ -903,6 +959,33 @@ mod tests {
                 assert!(response.get("bodyJson").is_none());
             }
         }
+    }
+
+    #[test]
+    fn json_response_field_selection_preserves_arrays_and_rejects_invalid_selectors() {
+        let payload =
+            json!({"responseFormat":"json", "responseJsonFields":["data","songs","name","ot"]});
+        let fields = component_response_json_fields(&payload).unwrap().unwrap();
+        let mut value = json!({"data":{"songs":[{"name":"Song","ot":42,"tracking":{"name":"discard"}}]},"tracking":"discard"});
+        retain_component_json_fields(&mut value, &fields, 0).unwrap();
+        assert_eq!(value, json!({"data":{"songs":[{"name":"Song","ot":42}]}}));
+        for selector in [
+            json!([]),
+            json!(["name", "name"]),
+            json!([3]),
+            json!(["x".repeat(65)]),
+            json!(["field\n"]),
+        ] {
+            assert!(component_response_json_fields(
+                &json!({"responseFormat":"json","responseJsonFields":selector})
+            )
+            .is_err());
+        }
+        assert!(component_response_json_fields(&json!({"responseJsonFields":["data"]})).is_err());
+        assert!(component_response_json_fields(&json!({}))
+            .unwrap()
+            .is_none());
+        assert!(retain_component_json_fields(&mut value, &fields, 65).is_err());
     }
 
     #[test]

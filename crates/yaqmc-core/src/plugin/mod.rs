@@ -36,6 +36,8 @@ pub mod provider;
 pub mod scanner;
 #[cfg(feature = "plugins")]
 pub mod settings;
+#[cfg(feature = "plugins")]
+pub mod updates;
 
 #[cfg(feature = "plugins")]
 pub use api::{

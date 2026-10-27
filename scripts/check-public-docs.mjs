@@ -8,6 +8,7 @@ const publicDocuments = [
   'account-membership.md',
   'account-library.md',
   'android.md',
+  'app-updates.md',
   'appearance.md',
   'architecture.md',
   'artwork.md',

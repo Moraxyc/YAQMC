@@ -35,6 +35,11 @@ files:
 extraMetadata:
   main: dist/main/index.js
 extraResources:
+  - from: resources/updater
+    to: updater
+    filter:
+      - 'yaqmc-update-helper*'
+      - 'manifest.json'
   - from: resources/core
     to: core
     filter:

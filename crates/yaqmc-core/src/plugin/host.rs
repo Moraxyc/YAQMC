@@ -24,6 +24,8 @@ use crate::plugin::{
 };
 use yaqmc_provider_api::{ProviderCapabilitySummary, ProviderRegistry};
 
+mod updates;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PluginStatus {
@@ -42,6 +44,7 @@ pub struct PluginRecord {
     pub id: String,
     pub name: String,
     pub version: String,
+    pub release: Option<crate::plugin::updates::ReleaseInfo>,
     pub description: Option<String>,
     pub authors: Vec<String>,
     pub enabled: bool,
@@ -94,6 +97,7 @@ pub struct ActiveScriptResource {
     pub plugin_id: String,
     pub plugin_name: String,
     pub source: String,
+    pub package_sha256: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -146,6 +150,18 @@ pub struct PluginDiagnostic {
 struct PluginStateFile {
     id: String,
     active_version: String,
+    #[serde(default)]
+    active_package: Option<String>,
+    #[serde(default)]
+    release: Option<crate::plugin::updates::ReleaseInfo>,
+    #[serde(default)]
+    session_epochs: BTreeMap<String, String>,
+    #[serde(default)]
+    session_secret_fields: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    retained_session_namespaces: Vec<String>,
+    #[serde(default)]
+    generation: u64,
     enabled: bool,
     status: PluginStatus,
     status_reason: Option<String>,
@@ -206,6 +222,7 @@ pub struct ExtensionHost {
     inner: Mutex<HostInner>,
     provider_runtime: Mutex<ProviderRuntimeState>,
     runtime_seq: AtomicU64,
+    updates: updates::UpdateState,
 }
 
 #[derive(Default)]
@@ -238,9 +255,10 @@ impl ExtensionHost {
     pub fn open(root: PathBuf) -> Result<Self, HostError> {
         fs::create_dir_all(&root)
             .map_err(|_| HostError::from("plugin storage could not be created"))?;
+        let recovered_update = updates::recover(&root)?;
         let mut host: HostFile = read_json(&root.join("host.json")).unwrap_or_default();
         let previous: JournalFile = read_json(&root.join("journal.json")).unwrap_or_default();
-        let crashed = previous.activation_started && !previous.clean_exit;
+        let crashed = previous.activation_started && !previous.clean_exit && !recovered_update;
         if crashed {
             host.safe_mode = true;
         }
@@ -261,7 +279,10 @@ impl ExtensionHost {
                 let Some(state): Option<PluginStateFile> = read_json(&state_path) else {
                     continue;
                 };
-                let version_dir = entry.path().join("versions").join(&state.active_version);
+                if !is_plugin_id(&state.id) || entry.file_name().to_string_lossy() != state.id {
+                    continue;
+                }
+                let version_dir = updates::package_path(&root, &state)?;
                 let manifest_path = version_dir.join("manifest.json");
                 let Ok(bytes) = fs::read(&manifest_path) else {
                     continue;
@@ -317,6 +338,7 @@ impl ExtensionHost {
             }
         }
         Ok(Self {
+            updates: updates::UpdateState::open(&root),
             root,
             inner: Mutex::new(HostInner {
                 host,
@@ -363,6 +385,7 @@ impl ExtensionHost {
             runtime,
         )
         .map_err(HostError::from)?;
+        self.recover_update_credentials(&services)?;
         self.attach_provider_state(registry, Some(services))
     }
 
@@ -522,7 +545,7 @@ impl ExtensionHost {
     }
 
     fn activate_provider_plugin(&self, id: &str) -> Result<(), HostError> {
-        let (manifest, dir, granted, enabled) = {
+        let (manifest, dir, granted, enabled, session_epochs, session_secret_fields) = {
             let inner = self
                 .inner
                 .lock()
@@ -535,6 +558,8 @@ impl ExtensionHost {
                 dir.clone(),
                 state.granted_permissions.clone(),
                 state.enabled && !inner.host.safe_mode,
+                state.session_epochs.clone(),
+                state.session_secret_fields.clone(),
             )
         };
         if manifest.api_version != 3 || !enabled {
@@ -639,17 +664,50 @@ impl ExtensionHost {
                 }
             }
             let host = host_services.as_ref().map(|services| {
-                services.for_plugin_with_settings(
+                let services = self
+                    .staged_component_services(id)
+                    .unwrap_or_else(|| services.clone());
+                let epoch = session_epochs.get(&provider.id).map(String::as_str);
+                let mut provider_settings = settings.clone();
+                if epoch.is_some() {
+                    if let Some(schema) = &manifest.settings_schema {
+                        for field in crate::plugin::settings::parse_settings_fields(schema)
+                            .unwrap_or_default()
+                        {
+                            if field.secret
+                                && !session_secret_fields
+                                    .get(&provider.id)
+                                    .is_some_and(|fields| fields.contains(&field.id))
+                            {
+                                if let Some(object) = provider_settings.as_object_mut() {
+                                    object.remove(&field.id);
+                                }
+                            }
+                        }
+                    }
+                }
+                services.for_plugin_session(
                     &manifest.id,
                     &provider.id,
                     allowed_origins.clone(),
-                    settings.clone(),
+                    provider_settings,
+                    epoch,
                 )
             });
-            let adapter = ComponentProviderAdapter::from_manifest_with_provider(
-                &manifest, provider, &bytes, host,
-            )
+            let adapter = if let Some(compiled) = self.precompiled_component(id) {
+                ComponentProviderAdapter::from_precompiled(&manifest, provider, compiled, host)
+            } else {
+                ComponentProviderAdapter::from_manifest_with_provider(
+                    &manifest, provider, &bytes, host,
+                )
+            }
             .map_err(|error| HostError::from(error.to_string()))?;
+            if self.staged_component_services(id).is_some() {
+                adapter
+                    .component()
+                    .validate_start()
+                    .map_err(|e| HostError::from(e.to_string()))?;
+            }
             adapters.push((provider.id.clone(), adapter));
         }
         let mut activated = Vec::<(String, Arc<ComponentProviderAdapter>)>::new();
@@ -747,7 +805,7 @@ impl ExtensionHost {
                     .insert(id.to_owned(), federation_ids.clone());
             }
         }
-        if restore_account {
+        if restore_account && !self.update_in_progress(id) {
             for (_, adapter) in &activated {
                 if let (Some(runtime_handle), Ok(account)) = (
                     runtime_handle.clone(),
@@ -956,6 +1014,7 @@ impl ExtensionHost {
     }
 
     pub fn set_developer_mode(&self, enabled: bool) -> Result<(), HostError> {
+        let _mutation = self.mutation_guard("*")?;
         let mut inner = self
             .inner
             .lock()
@@ -973,6 +1032,7 @@ impl ExtensionHost {
     }
 
     pub fn set_safe_mode(&self, enabled: bool) -> Result<(), HostError> {
+        let _mutation = self.mutation_guard("*")?;
         let mut inner = self
             .inner
             .lock()
@@ -992,6 +1052,11 @@ impl ExtensionHost {
     ) -> Result<PluginRecord, HostError> {
         let inspection =
             inspect_package(path).map_err(|error| HostError::from(error.to_string()))?;
+        if self.record(&inspection.manifest.id).is_ok() {
+            return Err(HostError::from(
+                "use plugin_update_prepare to review an installed plugin replacement",
+            ));
+        }
         if css_is_blocked(&inspection.style_scan) {
             return Err(HostError::from(
                 "the style entrypoint uses blocked remote or filesystem CSS",
@@ -1002,8 +1067,26 @@ impl ExtensionHost {
     }
 
     pub fn install_loose_css(&self, path: &Path) -> Result<PluginRecord, HostError> {
-        let source = fs::read_to_string(path)
+        let inspection = Self::inspect_loose_css(path)?;
+        if self.record(&inspection.manifest.id).is_ok() {
+            return Err(HostError::from(
+                "use plugin_update_prepare to review an installed plugin replacement",
+            ));
+        }
+        self.install_inspection(inspection, true, &[], "loose-css")
+    }
+
+    fn inspect_loose_css(path: &Path) -> Result<PackageInspection, HostError> {
+        use std::io::Read;
+        let mut source = String::new();
+        fs::File::open(path)
+            .map_err(|_| HostError::from("the CSS file could not be read"))?
+            .take(crate::plugin::LEGACY_MAX_COMPRESSED_BYTES + 1)
+            .read_to_string(&mut source)
             .map_err(|_| HostError::from("the CSS file could not be read"))?;
+        if source.len() as u64 > crate::plugin::LEGACY_MAX_COMPRESSED_BYTES {
+            return Err(HostError::from("the CSS file is too large"));
+        }
         let scan = crate::plugin::scanner::scan_css(&source);
         if css_is_blocked(&scan) {
             return Err(HostError::from(
@@ -1035,6 +1118,7 @@ impl ExtensionHost {
             name: stem,
             description: Some("Local CSS convenience import".into()),
             version: "0.0.0-local".into(),
+            release: None,
             api_version: 2,
             authors: Vec::new(),
             homepage: None,
@@ -1077,7 +1161,7 @@ impl ExtensionHost {
             style_scan: scan,
             script_scan: ScanReport::default(),
         };
-        self.install_inspection(inspection, true, &[], "loose-css")
+        Ok(inspection)
     }
 
     pub fn install_unpacked(
@@ -1093,6 +1177,11 @@ impl ExtensionHost {
         }
         let inspection =
             inspect_package(path).map_err(|error| HostError::from(error.to_string()))?;
+        if self.record(&inspection.manifest.id).is_ok() {
+            return Err(HostError::from(
+                "use plugin_update_prepare to review an installed plugin replacement",
+            ));
+        }
         if let Some(message) = crate::plugin::package::stale_typescript_message(&inspection.files) {
             return Err(HostError::from(message));
         }
@@ -1119,35 +1208,12 @@ impl ExtensionHost {
         persist_state(&self.root, state, manifest, dir.clone())
     }
 
+    /// Compatibility entry point: replacement now requires a prepared review.
     pub fn reload(&self, id: &str) -> Result<PluginRecord, HostError> {
-        if !self.developer_mode() {
-            return Err(HostError::from("reload requires Developer Mode"));
-        }
-        let (unpacked, enabled, grants) = {
-            let inner = self
-                .inner
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let (state, _, _) = inner
-                .records
-                .get(id)
-                .ok_or_else(|| HostError::from("the plugin is not installed"))?;
-            (
-                state.unpacked_path.clone(),
-                state.enabled,
-                state.granted_permissions.clone(),
-            )
-        };
-        let Some(unpacked) = unpacked else {
-            return Err(HostError::from(
-                "only unpacked Developer Mode plugins can be reloaded from disk",
-            ));
-        };
-        if enabled {
-            self.set_enabled_with_grants(id, false, &[])?;
-        }
-        let record = self.install_unpacked(Path::new(&unpacked), enabled, &grants)?;
-        Ok(record)
+        self.record(id)?;
+        Err(HostError::from(
+            "use plugin_update_prepare with the unpacked path to review a reload",
+        ))
     }
 
     fn install_inspection(
@@ -1157,6 +1223,7 @@ impl ExtensionHost {
         grant: &[String],
         source: &str,
     ) -> Result<PluginRecord, HostError> {
+        let _mutation = self.mutation_guard(&inspection.manifest.id)?;
         let mut inner = self
             .inner
             .lock()
@@ -1178,6 +1245,12 @@ impl ExtensionHost {
             let state = PluginStateFile {
                 id: inspection.manifest.id.clone(),
                 active_version: inspection.manifest.version.clone(),
+                active_package: None,
+                release: inspection.manifest.release.clone(),
+                session_epochs: BTreeMap::new(),
+                session_secret_fields: BTreeMap::new(),
+                retained_session_namespaces: Vec::new(),
+                generation: 0,
                 enabled: false,
                 status: PluginStatus::Incompatible,
                 status_reason: Some(reason.clone()),
@@ -1231,6 +1304,12 @@ impl ExtensionHost {
         let state = PluginStateFile {
             id: inspection.manifest.id.clone(),
             active_version: inspection.manifest.version.clone(),
+            active_package: None,
+            release: inspection.manifest.release.clone(),
+            session_epochs: BTreeMap::new(),
+            session_secret_fields: BTreeMap::new(),
+            retained_session_namespaces: Vec::new(),
+            generation: 0,
             enabled: enable && !inner.host.safe_mode,
             status: if enable && !inner.host.safe_mode {
                 PluginStatus::Active
@@ -1281,6 +1360,7 @@ impl ExtensionHost {
         enabled: bool,
         grants: &[String],
     ) -> Result<PluginRecord, HostError> {
+        let _mutation = self.mutation_guard(id)?;
         let mut inner = self
             .inner
             .lock()
@@ -1346,6 +1426,7 @@ impl ExtensionHost {
             .get_mut(id)
             .ok_or_else(|| HostError::from("the plugin is not installed"))?;
         state.granted_permissions = granted;
+        state.generation = state.generation.saturating_add(1);
         state.enabled = enabled;
         state.status = if enabled {
             PluginStatus::Active
@@ -1360,6 +1441,7 @@ impl ExtensionHost {
     }
 
     pub fn mark_failed(&self, id: &str, reason: &str) -> Result<PluginRecord, HostError> {
+        let _mutation = self.mutation_guard(id)?;
         let _ = self.deactivate_provider_plugin(id);
         let mut inner = self
             .inner
@@ -1374,13 +1456,32 @@ impl ExtensionHost {
         state.enabled = false;
         state.status = PluginStatus::Failed;
         state.status_reason = Some(reason.to_owned());
+        state.generation = state.generation.saturating_add(1);
         persist_state(&self.root, state, manifest, dir.clone())?;
         Ok(to_record(state, manifest, safe_mode))
     }
 
     pub fn install_loose_script(&self, path: &Path) -> Result<PluginRecord, HostError> {
-        let source = fs::read_to_string(path)
+        let inspection = Self::inspect_loose_script(path)?;
+        if self.record(&inspection.manifest.id).is_ok() {
+            return Err(HostError::from(
+                "use plugin_update_prepare to review an installed plugin replacement",
+            ));
+        }
+        self.install_inspection(inspection, false, &[], "loose-script")
+    }
+
+    fn inspect_loose_script(path: &Path) -> Result<PackageInspection, HostError> {
+        use std::io::Read;
+        let mut source = String::new();
+        fs::File::open(path)
+            .map_err(|_| HostError::from("the script file could not be read"))?
+            .take(crate::plugin::LEGACY_MAX_COMPRESSED_BYTES + 1)
+            .read_to_string(&mut source)
             .map_err(|_| HostError::from("the script file could not be read"))?;
+        if source.len() as u64 > crate::plugin::LEGACY_MAX_COMPRESSED_BYTES {
+            return Err(HostError::from("the script file is too large"));
+        }
         let scan = crate::plugin::scanner::scan_script(&source);
         let stem = path
             .file_stem()
@@ -1410,6 +1511,7 @@ impl ExtensionHost {
             name: stem,
             description: Some("Local script convenience import".into()),
             version: "0.0.0-local".into(),
+            release: None,
             api_version: 2,
             authors: Vec::new(),
             homepage: None,
@@ -1452,7 +1554,7 @@ impl ExtensionHost {
             style_scan: ScanReport::default(),
             script_scan: scan,
         };
-        self.install_inspection(inspection, false, &[], "loose-script")
+        Ok(inspection)
     }
 
     pub fn active_resources(&self) -> ActivePluginResources {
@@ -1479,7 +1581,7 @@ impl ExtensionHost {
             let Some((state, manifest, dir)) = inner.records.get(id) else {
                 continue;
             };
-            if !state.enabled {
+            if !state.enabled && self.update_phase(id).as_deref() != Some("validating") {
                 continue;
             }
             for style in &manifest.entrypoints.styles {
@@ -1495,7 +1597,7 @@ impl ExtensionHost {
         let mut scenes = Vec::new();
         let mut scripts = Vec::new();
         for (id, (state, manifest, dir)) in &inner.records {
-            if !state.enabled {
+            if !state.enabled && self.update_phase(id).as_deref() != Some("validating") {
                 continue;
             }
             for scene_path in &manifest.entrypoints.scenes {
@@ -1526,6 +1628,7 @@ impl ExtensionHost {
                         plugin_id: id.clone(),
                         plugin_name: manifest.name.clone(),
                         source,
+                        package_sha256: state.package_sha256.clone(),
                     });
                 }
             }
@@ -1541,6 +1644,7 @@ impl ExtensionHost {
     }
 
     pub fn uninstall(&self, id: &str, remove_data: bool) -> Result<(), HostError> {
+        let _mutation = self.mutation_guard(id)?;
         self.deactivate_provider_plugin(id)?;
         let provider_ids = {
             let inner = self
@@ -1578,6 +1682,29 @@ impl ExtensionHost {
                         let _ = self.activate_provider_plugin(id);
                         return Err(HostError::from(error));
                     }
+                }
+                let namespaces = self
+                    .inner
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .records
+                    .get(id)
+                    .map(|(state, manifest, _)| {
+                        let mut namespaces = state.retained_session_namespaces.clone();
+                        for provider in manifest.provider_declarations() {
+                            namespaces.push(crate::plugin::component_host::session_namespace(
+                                id,
+                                &provider.id,
+                                state.session_epochs.get(&provider.id).map(String::as_str),
+                            ));
+                        }
+                        namespaces
+                    })
+                    .unwrap_or_default();
+                for namespace in namespaces {
+                    services
+                        .remove_namespace_data(&namespace)
+                        .map_err(HostError::from)?;
                 }
             }
         }
@@ -1636,6 +1763,10 @@ impl ExtensionHost {
     }
 
     pub fn start_runtime(&self, plugin_id: &str) -> Result<RuntimeToken, HostError> {
+        let phase = self.update_phase(plugin_id);
+        if phase.as_deref().is_some_and(|phase| phase != "validating") {
+            return Err(HostError::from("update-validation-in-progress"));
+        }
         let mut inner = self
             .inner
             .lock()
@@ -1647,7 +1778,7 @@ impl ExtensionHost {
             .records
             .get(plugin_id)
             .ok_or_else(|| HostError::from("the plugin is not installed"))?;
-        if !state.enabled {
+        if !state.enabled && phase.as_deref() != Some("validating") {
             return Err(HostError::from("the plugin is disabled"));
         }
         let token = format!(
@@ -1752,10 +1883,7 @@ impl ExtensionHost {
             namespace.remove(key);
             return Err(HostError::from("plugin storage quota exceeded"));
         }
-        write_json(
-            &self.root.join(format!("{plugin_id}.storage.json")),
-            namespace,
-        )
+        write_json(&self.update_storage_path(plugin_id), namespace)
     }
 
     pub fn settings_get(
@@ -1804,6 +1932,7 @@ impl ExtensionHost {
         plugin_id: &str,
         patch: serde_json::Map<String, serde_json::Value>,
     ) -> Result<serde_json::Value, HostError> {
+        let _mutation = self.mutation_guard(plugin_id)?;
         let mut inner = self
             .inner
             .lock()
@@ -1835,6 +1964,22 @@ impl ExtensionHost {
             crate::plugin::settings::parse_settings_fields(&schema).map_err(HostError::from)?;
         let public = crate::plugin::settings::public_settings(&fields, &next);
         inner.settings.insert(plugin_id.to_owned(), next);
+        if let Some((state, manifest, dir)) = inner.records.get_mut(plugin_id) {
+            state.generation = state.generation.saturating_add(1);
+            for provider in state.session_epochs.keys() {
+                let allowed = state
+                    .session_secret_fields
+                    .entry(provider.clone())
+                    .or_default();
+                for field in &fields {
+                    if field.secret && patch.contains_key(&field.id) && !allowed.contains(&field.id)
+                    {
+                        allowed.push(field.id.clone());
+                    }
+                }
+            }
+            persist_state(&self.root, state, manifest, dir.clone())?;
+        }
         let enabled = inner
             .records
             .get(plugin_id)
@@ -2007,6 +2152,7 @@ fn to_record(state: &PluginStateFile, manifest: &PluginManifest, safe_mode: bool
         id: manifest.id.clone(),
         name: manifest.name.clone(),
         version: manifest.version.clone(),
+        release: state.release.clone().or_else(|| manifest.release.clone()),
         description: manifest.description.clone(),
         authors: manifest.authors.clone(),
         enabled,
@@ -2023,7 +2169,7 @@ fn to_record(state: &PluginStateFile, manifest: &PluginManifest, safe_mode: bool
         api_version: manifest.api_version,
         package_sha256: state.package_sha256.clone(),
         source: state.source.clone(),
-        unsigned: true,
+        unsigned: !state.source.starts_with("trusted:"),
         entrypoints: EntrypointSummary {
             styles: manifest.entrypoints.styles.len(),
             scenes: manifest.entrypoints.scenes.len(),
@@ -2113,7 +2259,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), HostError> {
     }
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|_| HostError::from("plugin state could not be saved"))?;
-    fs::write(path, bytes).map_err(|_| HostError::from("plugin state could not be saved"))
+    updates::atomic_bytes(path, &bytes).map_err(HostError::from)
 }
 
 fn now_ms() -> u64 {
@@ -2133,7 +2279,7 @@ mod tests {
     use serde_json::json;
     use yaqmc_provider_api::{CredentialStore, ProviderRegistry};
 
-    fn style_inspection(id: &str) -> PackageInspection {
+    pub(super) fn style_inspection(id: &str) -> PackageInspection {
         let manifest = PluginManifest::parse(
             format!(
                 r#"{{
@@ -2169,7 +2315,7 @@ mod tests {
         }
     }
 
-    fn component_inspection(plugin_id: &str, provider_id: &str) -> PackageInspection {
+    pub(super) fn component_inspection(plugin_id: &str, provider_id: &str) -> PackageInspection {
         let manifest = PluginManifest::parse(
             format!(
                 r#"{{
@@ -2214,7 +2360,7 @@ mod tests {
         }
     }
 
-    fn account_component_inspection() -> PackageInspection {
+    pub(super) fn account_component_inspection() -> PackageInspection {
         let manifest = PluginManifest::parse(
             br#"{
                 "manifestVersion": 2,
@@ -2260,7 +2406,7 @@ mod tests {
         }
     }
 
-    fn multi_provider_component_inspection() -> PackageInspection {
+    pub(super) fn multi_provider_component_inspection() -> PackageInspection {
         let manifest: PluginManifest = serde_json::from_value(json!({
             "manifestVersion": 2,
             "id": "org.example.multi-music",
@@ -2416,7 +2562,7 @@ mod tests {
         }
     }
 
-    fn provider_registry(root: &Path) -> Arc<ProviderRegistry> {
+    pub(super) fn provider_registry(root: &Path) -> Arc<ProviderRegistry> {
         let storage = Arc::new(
             crate::storage::StorageService::open(root.join("data"), root.join("cache"))
                 .expect("storage"),

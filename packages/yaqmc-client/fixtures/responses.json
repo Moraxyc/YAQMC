@@ -41,6 +41,12 @@
       "ok": true
     }
   },
+  "core_shutdown_cancel": {
+    "id": 116,
+    "kind": "response",
+    "ok": true,
+    "result": null
+  },
   "deep_link_status": {
     "id": 19,
     "kind": "response",
@@ -69,6 +75,111 @@
     "id": 99,
     "kind": "response",
     "ok": false
+  },
+  "host_updater_cancel": {
+    "id": 114,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "allowPrerelease": false,
+      "buildSource": "source",
+      "canInstall": false,
+      "channel": "latest",
+      "currentVersion": "0.1.1",
+      "installDisabledReason": "non-release-build",
+      "packageKind": "managed",
+      "state": "idle"
+    }
+  },
+  "host_updater_check": {
+    "id": 109,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "allowPrerelease": false,
+      "buildSource": "source",
+      "canInstall": false,
+      "channel": "latest",
+      "currentVersion": "0.1.1",
+      "installDisabledReason": "non-release-build",
+      "packageKind": "managed",
+      "state": "idle"
+    }
+  },
+  "host_updater_download": {
+    "id": 110,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "allowPrerelease": false,
+      "buildSource": "source",
+      "canInstall": false,
+      "channel": "latest",
+      "currentVersion": "0.1.1",
+      "installDisabledReason": "non-release-build",
+      "packageKind": "managed",
+      "state": "idle"
+    }
+  },
+  "host_updater_install": {
+    "id": 111,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "allowPrerelease": false,
+      "buildSource": "source",
+      "canInstall": false,
+      "channel": "latest",
+      "currentVersion": "0.1.1",
+      "installDisabledReason": "non-release-build",
+      "packageKind": "managed",
+      "state": "idle"
+    }
+  },
+  "host_updater_preferences": {
+    "id": 115,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "allowPrerelease": false,
+      "buildSource": "source",
+      "canInstall": false,
+      "channel": "latest",
+      "currentVersion": "0.1.1",
+      "installDisabledReason": "non-release-build",
+      "packageKind": "managed",
+      "state": "idle"
+    }
+  },
+  "host_updater_start": {
+    "id": 113,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "allowPrerelease": false,
+      "buildSource": "source",
+      "canInstall": false,
+      "channel": "latest",
+      "currentVersion": "0.1.1",
+      "installDisabledReason": "non-release-build",
+      "packageKind": "managed",
+      "state": "idle"
+    }
+  },
+  "host_updater_status": {
+    "id": 112,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "allowPrerelease": false,
+      "buildSource": "source",
+      "canInstall": false,
+      "channel": "latest",
+      "currentVersion": "0.1.1",
+      "installDisabledReason": "non-release-build",
+      "packageKind": "managed",
+      "state": "idle"
+    }
   },
   "player_snapshot": {
     "id": 1,
@@ -158,6 +269,266 @@
       ],
       "volume": 0.72
     }
+  },
+  "plugin_update_apply": {
+    "id": 104,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "downloadedBytes": 0,
+      "error": null,
+      "operationId": "operation-0",
+      "phase": "prepared",
+      "pluginId": "dev.example.update",
+      "preview": {
+        "addedPermissions": [],
+        "confirmations": [
+          "replacement",
+          "unverified-source"
+        ],
+        "currentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "currentVersion": "1.0.0",
+        "enabled": true,
+        "expectedGeneration": 1,
+        "grantedPermissions": [
+          "plugin.storage"
+        ],
+        "hasScript": true,
+        "name": "Example",
+        "needsRenderer": true,
+        "permissions": [
+          "plugin.storage"
+        ],
+        "pluginId": "dev.example.update",
+        "providerIds": [
+          "example.music"
+        ],
+        "release": {
+          "buildId": "hotfix-1",
+          "channel": "stable",
+          "releaseSequence": 2
+        },
+        "removedPermissions": [],
+        "sessionChanges": [],
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "trustedSource": null,
+        "version": "1.0.0"
+      },
+      "runtimeChanged": false,
+      "totalBytes": null
+    }
+  },
+  "plugin_update_cancel": {
+    "id": 106,
+    "kind": "response",
+    "ok": true,
+    "result": null
+  },
+  "plugin_update_check": {
+    "id": 102,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "downloadedBytes": 0,
+      "error": null,
+      "operationId": "operation-0",
+      "phase": "prepared",
+      "pluginId": "dev.example.update",
+      "preview": {
+        "addedPermissions": [],
+        "confirmations": [
+          "replacement",
+          "unverified-source"
+        ],
+        "currentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "currentVersion": "1.0.0",
+        "enabled": true,
+        "expectedGeneration": 1,
+        "grantedPermissions": [
+          "plugin.storage"
+        ],
+        "hasScript": true,
+        "name": "Example",
+        "needsRenderer": true,
+        "permissions": [
+          "plugin.storage"
+        ],
+        "pluginId": "dev.example.update",
+        "providerIds": [
+          "example.music"
+        ],
+        "release": {
+          "buildId": "hotfix-1",
+          "channel": "stable",
+          "releaseSequence": 2
+        },
+        "removedPermissions": [],
+        "sessionChanges": [],
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "trustedSource": null,
+        "version": "1.0.0"
+      },
+      "runtimeChanged": false,
+      "totalBytes": null
+    }
+  },
+  "plugin_update_editing": {
+    "id": 108,
+    "kind": "response",
+    "ok": true,
+    "result": null
+  },
+  "plugin_update_policy_get": {
+    "id": 100,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "available": [],
+      "policy": {
+        "automatic": false,
+        "bound": false,
+        "channel": "stable",
+        "failedReleaseId": null,
+        "failedSha256": null,
+        "failures": 0,
+        "feedDigest": "",
+        "feedSequence": 0,
+        "lastCheckMs": 0,
+        "lastResult": null,
+        "releasesSeen": {},
+        "retryAfterMs": 0,
+        "sourceHistory": {},
+        "sourceId": null,
+        "trustDigest": ""
+      },
+      "sources": []
+    }
+  },
+  "plugin_update_policy_set": {
+    "id": 101,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "automatic": false,
+      "bound": false,
+      "channel": "stable",
+      "failedReleaseId": null,
+      "failedSha256": null,
+      "failures": 0,
+      "feedDigest": "",
+      "feedSequence": 0,
+      "lastCheckMs": 0,
+      "lastResult": null,
+      "releasesSeen": {},
+      "retryAfterMs": 0,
+      "sourceHistory": {},
+      "sourceId": null,
+      "trustDigest": ""
+    }
+  },
+  "plugin_update_prepare": {
+    "id": 103,
+    "kind": "response",
+    "ok": true,
+    "result": {
+      "downloadedBytes": 0,
+      "error": null,
+      "operationId": "operation-0",
+      "phase": "prepared",
+      "pluginId": "dev.example.update",
+      "preview": {
+        "addedPermissions": [],
+        "confirmations": [
+          "replacement",
+          "unverified-source"
+        ],
+        "currentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "currentVersion": "1.0.0",
+        "enabled": true,
+        "expectedGeneration": 1,
+        "grantedPermissions": [
+          "plugin.storage"
+        ],
+        "hasScript": true,
+        "name": "Example",
+        "needsRenderer": true,
+        "permissions": [
+          "plugin.storage"
+        ],
+        "pluginId": "dev.example.update",
+        "providerIds": [
+          "example.music"
+        ],
+        "release": {
+          "buildId": "hotfix-1",
+          "channel": "stable",
+          "releaseSequence": 2
+        },
+        "removedPermissions": [],
+        "sessionChanges": [],
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "trustedSource": null,
+        "version": "1.0.0"
+      },
+      "runtimeChanged": false,
+      "totalBytes": null
+    }
+  },
+  "plugin_update_runtime_ready": {
+    "id": 107,
+    "kind": "response",
+    "ok": true,
+    "result": null
+  },
+  "plugin_update_status": {
+    "id": 105,
+    "kind": "response",
+    "ok": true,
+    "result": [
+      {
+        "downloadedBytes": 0,
+        "error": null,
+        "operationId": "operation-0",
+        "phase": "prepared",
+        "pluginId": "dev.example.update",
+        "preview": {
+          "addedPermissions": [],
+          "confirmations": [
+            "replacement",
+            "unverified-source"
+          ],
+          "currentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "currentVersion": "1.0.0",
+          "enabled": true,
+          "expectedGeneration": 1,
+          "grantedPermissions": [
+            "plugin.storage"
+          ],
+          "hasScript": true,
+          "name": "Example",
+          "needsRenderer": true,
+          "permissions": [
+            "plugin.storage"
+          ],
+          "pluginId": "dev.example.update",
+          "providerIds": [
+            "example.music"
+          ],
+          "release": {
+            "buildId": "hotfix-1",
+            "channel": "stable",
+            "releaseSequence": 2
+          },
+          "removedPermissions": [],
+          "sessionChanges": [],
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "trustedSource": null,
+          "version": "1.0.0"
+        },
+        "runtimeChanged": false,
+        "totalBytes": null
+      }
+    ]
   },
   "provider_profile_create": {
     "id": 22,

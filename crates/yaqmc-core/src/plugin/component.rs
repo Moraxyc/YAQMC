@@ -98,7 +98,24 @@ pub struct ProviderComponent {
     inner: Arc<ComponentInner>,
 }
 
+#[derive(Clone)]
+pub(crate) struct CompiledComponent {
+    engine: Engine,
+    component: Component,
+}
+
 impl ProviderComponent {
+    pub(crate) fn compile(bytes: &[u8]) -> Result<CompiledComponent, ComponentRuntimeError> {
+        let mut config = Config::new();
+        config
+            .wasm_component_model(true)
+            .consume_fuel(true)
+            .epoch_interruption(true);
+        let engine = Engine::new(&config).map_err(|_| ComponentRuntimeError::InvalidComponent)?;
+        let component =
+            Component::new(&engine, bytes).map_err(|_| ComponentRuntimeError::InvalidComponent)?;
+        Ok(CompiledComponent { engine, component })
+    }
     pub fn load(
         bytes: &[u8],
         capabilities: impl IntoIterator<Item = ProviderCapability>,
@@ -112,20 +129,22 @@ impl ProviderComponent {
         world: ProviderWorld,
         host: Option<ComponentHostContext>,
     ) -> Result<Self, ComponentRuntimeError> {
+        Self::from_compiled(Self::compile(bytes)?, capabilities, world, host)
+    }
+
+    pub(crate) fn from_compiled(
+        compiled: CompiledComponent,
+        capabilities: impl IntoIterator<Item = ProviderCapability>,
+        world: ProviderWorld,
+        host: Option<ComponentHostContext>,
+    ) -> Result<Self, ComponentRuntimeError> {
         if world != ProviderWorld::Isolated && host.is_none() {
             return Err(ComponentRuntimeError::HostUnavailable);
         }
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        config.consume_fuel(true);
-        config.epoch_interruption(true);
-        let engine = Engine::new(&config).map_err(|_| ComponentRuntimeError::InvalidComponent)?;
-        let component =
-            Component::new(&engine, bytes).map_err(|_| ComponentRuntimeError::InvalidComponent)?;
         Ok(Self {
             inner: Arc::new(ComponentInner {
-                engine,
-                component,
+                engine: compiled.engine,
+                component: compiled.component,
                 capabilities: capabilities.into_iter().collect(),
                 world,
                 host,
@@ -144,6 +163,69 @@ impl ProviderComponent {
 
     pub fn circuit_open(&self) -> bool {
         self.inner.circuit_open.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn busy(&self) -> bool {
+        self.inner.permits.available_permits() != COMPONENT_MAX_CONCURRENCY
+    }
+
+    #[cfg(test)]
+    pub(crate) fn host_settings_for_test(&self) -> Option<String> {
+        self.inner
+            .host
+            .as_ref()
+            .and_then(|host| host.settings_get().ok())
+    }
+
+    /// Link and instantiate without issuing any provider operation. A staged
+    /// host holds local writes and refuses outbound requests until commit.
+    pub(crate) fn validate_start(&self) -> Result<(), ComponentRuntimeError> {
+        let engine = self.inner.engine.clone();
+        let (done, waiting) = std::sync::mpsc::channel();
+        let timer = std::thread::spawn(move || {
+            if waiting.recv_timeout(COMPONENT_OPERATION_DEADLINE).is_err() {
+                engine.increment_epoch();
+            }
+        });
+        let result = (|| {
+            let limits = StoreLimitsBuilder::new()
+                .memory_size(COMPONENT_MEMORY_LIMIT)
+                .instances(32)
+                .tables(32)
+                .memories(32)
+                .build();
+            let mut store = Store::new(
+                &self.inner.engine,
+                ComponentStore {
+                    table: ResourceTable::new(),
+                    wasi: WasiCtx::builder().build(),
+                    limits,
+                    cancellation: self.current_cancellation(),
+                },
+            );
+            store.limiter(|state| &mut state.limits);
+            store
+                .set_fuel(COMPONENT_OPERATION_FUEL)
+                .map_err(|_| ComponentRuntimeError::SandboxFault)?;
+            store.set_epoch_deadline(1);
+            store.epoch_deadline_trap();
+            let mut linker = Linker::new(&self.inner.engine);
+            wasmtime_wasi::p2::add_to_linker_proxy_interfaces_sync(&mut linker)
+                .map_err(|_| ComponentRuntimeError::SandboxFault)?;
+            add_component_host_imports(&mut linker, self.inner.world, self.inner.host.clone())?;
+            let instance = linker
+                .instantiate(&mut store, &self.inner.component)
+                .map_err(|_| ComponentRuntimeError::InvalidComponent)?;
+            instance
+                .get_typed_func::<(&str, &str, &str), (Result<String, String>,)>(
+                    &mut store, "invoke",
+                )
+                .map_err(|_| ComponentRuntimeError::InvalidComponent)?;
+            Ok(())
+        })();
+        let _ = done.send(());
+        let _ = timer.join();
+        result
     }
 
     pub fn consecutive_faults(&self) -> u8 {
@@ -178,6 +260,9 @@ impl ProviderComponent {
         operation: &str,
         payload_json: &str,
     ) -> Result<String, ComponentRuntimeError> {
+        if self.inner.host.as_ref().is_some_and(|h| h.staging()) {
+            return Err(ComponentRuntimeError::Disabled);
+        }
         if !self.enabled() {
             return Err(ComponentRuntimeError::Disabled);
         }
@@ -461,6 +546,9 @@ fn add_network_imports(
         .map_err(|_| ComponentRuntimeError::SandboxFault)?;
     instance
         .func_wrap("request", move |store, (request_json,): (String,)| {
+            if host.staging() {
+                return Ok((Err::<String, String>("plugin update is validating".into()),));
+            }
             let cancellation = store.data().cancellation.clone();
             let result =
                 component_network_request(&host, allow_credentials, &request_json, cancellation);

@@ -885,6 +885,20 @@ function mergeFirstSeen<T>(base: T[], incoming: T[], keyOf: (item: T) => EntityI
   return merged;
 }
 
+function mergeRecentHistory(
+  base: RemotePlayHistoryItem[],
+  incoming: RemotePlayHistoryItem[],
+): RemotePlayHistoryItem[] {
+  const bySong = new Map(base.map((item) => [item.song.id, item]));
+  for (const item of incoming) {
+    const previous = bySong.get(item.song.id);
+    if (!previous || (item.playedAtMs ?? 0) > (previous.playedAtMs ?? 0)) {
+      bySong.set(item.song.id, item);
+    }
+  }
+  return [...bySong.values()].sort((a, b) => (b.playedAtMs ?? 0) - (a.playedAtMs ?? 0));
+}
+
 function projectFavoritePage(
   scope: AccountScopeKey,
   runtime: FavoriteRuntime,
@@ -1011,8 +1025,18 @@ async function loadPagedList<T>(options: {
   request: (cursor: string | undefined, signal?: AbortSignal) => Promise<Page<T>>;
   keyOf: (item: T) => EntityId;
   autoLoadAll?: boolean;
+  merge?: (base: T[], incoming: T[]) => T[];
 }): Promise<void> {
-  const { provider, resource, reset, capability, request, keyOf, autoLoadAll } = options;
+  const {
+    provider,
+    resource,
+    reset,
+    capability,
+    request,
+    keyOf,
+    autoLoadAll,
+    merge = (base, incoming) => mergeFirstSeen(base, incoming, keyOf),
+  } = options;
   const scope = activateAccountScope(provider);
   const favoritesRuntime = favoriteRuntimeFor(scope);
   const snapshot = stateForAccountScope(scope).snapshot;
@@ -1058,7 +1082,7 @@ async function loadPagedList<T>(options: {
     ) {
       return;
     }
-    let data = mergeFirstSeen(previousData, page.items, keyOf);
+    let data = merge(previousData, page.items);
     if (autoLoadAll) {
       while (
         page.nextCursor !== null &&
@@ -1077,7 +1101,7 @@ async function loadPagedList<T>(options: {
         ) {
           return;
         }
-        data = mergeFirstSeen(data, page.items, keyOf);
+        data = merge(data, page.items);
       }
     }
     if (resource === 'favorites') {
@@ -1439,6 +1463,7 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
       capability: 'recentHistoryRead',
       request: (cursor, signal) => provider.getAccountRecentlyPlayed(cursor, 100, signal),
       keyOf: (item) => item.song.id,
+      merge: mergeRecentHistory,
     }),
   loadNext: (provider, resource) => {
     if (resource === 'favorites') return get().loadFavorites(provider, false);

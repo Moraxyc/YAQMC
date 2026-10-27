@@ -37,12 +37,12 @@ describe('@yaqmc/client protocol mirror', () => {
     expect(FRAME_HARD_CAP_BYTES).toBe(32 * 1024 * 1024);
   });
 
-  it('mirrors 173 migrated methods plus 17 protocol-only methods', () => {
-    expect(MIGRATED_METHOD_NAMES).toHaveLength(173);
+  it('mirrors 182 migrated methods plus 25 protocol-only methods', () => {
+    expect(MIGRATED_METHOD_NAMES).toHaveLength(182);
     expect(MIGRATED_METHOD_NAMES).toContain('provider_comments_cancel');
-    expect(PROTOCOL_ONLY_METHODS).toHaveLength(17);
-    expect(METHOD_NAMES).toHaveLength(190);
-    expect(new Set(METHOD_NAMES).size).toBe(190);
+    expect(PROTOCOL_ONLY_METHODS).toHaveLength(25);
+    expect(METHOD_NAMES).toHaveLength(207);
+    expect(new Set(METHOD_NAMES).size).toBe(207);
   });
 
   it('mirrors ADR-004 core and host event channels', () => {
@@ -52,6 +52,7 @@ describe('@yaqmc/client protocol mirror', () => {
       'lyrics://projection',
       'lyrics://document',
       'plugin://changed',
+      'plugin://update-progress',
       'preferences://changed',
       'host://command',
       'core://log',

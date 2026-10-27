@@ -1,3 +1,5 @@
+import { zhCN as pluginUpdates } from './plugin-updates';
+import { appUpdatesZhCN } from './app-updates';
 import type { enUS } from './en-US';
 
 type TranslationShape<T> = {
@@ -629,7 +631,6 @@ export const zhCN = {
   settings: {
     updates: {
       title: '更新',
-      description: '检查 YAQMC 新版本。更新不会静默安装。',
       check: '检查更新',
       checking: '正在检查更新…',
       availableManualVersion: '发现新版本 {{version}}。此安装包不支持原位更新，请打开发行页面。',
@@ -645,14 +646,12 @@ export const zhCN = {
       installFailed: '无法重启并安装更新。',
       idle: '尚未检查更新。',
       download: '下载',
-      downloadDescription: '仅在点击后开始下载，不会在后台安装。',
-      downloadAction: '下载更新',
       release: '发行页面',
       androidReleaseDescription: 'Android 会打开 GitHub Releases 上的签名 APK，不会自动安装。',
-      releaseDescription: 'deb / rpm / tar.gz 安装包不支持原位更新。',
       releaseAction: '打开发行页面',
       install: '重启并安装',
       installDescription: '仅在点击后安装，播放将停止。',
+      ...appUpdatesZhCN,
     },
     eyebrow: '应用',
     title: '设置',
@@ -928,6 +927,7 @@ export const zhCN = {
       resetPosition: '重置位置',
     },
     plugins: {
+      updates: pluginUpdates,
       title: '插件',
       description:
         '安装本地 YAQMC 运行时插件，用于样式、歌词场景和隔离脚本。这些不是 Electron 扩展。',

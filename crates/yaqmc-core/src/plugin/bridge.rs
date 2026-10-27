@@ -43,6 +43,18 @@ pub async fn dispatch_bridge(
     player: &PlayerService,
     request: &PluginBridgeRequest,
 ) -> Result<Value, String> {
+    let call = host.begin_bridge_call(&request.token)?;
+    tokio::select! {
+        _ = call.cancelled() => Err("plugin-request-cancelled".into()),
+        result = dispatch_active_bridge(host, player, request) => result,
+    }
+}
+
+async fn dispatch_active_bridge(
+    host: &ExtensionHost,
+    player: &PlayerService,
+    request: &PluginBridgeRequest,
+) -> Result<Value, String> {
     if request.method.len() > 64 {
         return Err("invalid plugin API method".into());
     }
@@ -54,6 +66,22 @@ pub async fn dispatch_bridge(
         host.runtime(&request.token)
             .ok_or_else(|| "unknown plugin runtime".to_owned())?
     };
+    if host.update_in_progress(&runtime.plugin_id)
+        && !matches!(
+            request.method.as_str(),
+            "storage.get"
+                | "storage.set"
+                | "settings.get"
+                | "log.info"
+                | "log.warn"
+                | "log.error"
+                | "ui.contextMenu.track.register"
+                | "ui.playerBar.register"
+                | "ui.sidebar.register"
+        )
+    {
+        return Err("update-validation-in-progress".into());
+    }
     let rate_key = if request.method == "player.seek" {
         "player.seek"
     } else if request.method.starts_with("player.") {

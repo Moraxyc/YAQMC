@@ -53,6 +53,17 @@ cache recipe; it contains no media URL, request header, credential value, or fil
 
 ## Compatibility and lifecycle
 
+The `network.request` JSON envelope accepts optional `responseJsonFields` when `responseFormat` is `json`.
+It is a list of 1–128 unique, nonempty field names (at most 64 UTF-8 bytes each, without control characters).
+For successful JSON responses, the Host recursively retains only those object keys before returning `bodyJson`;
+array order and scalar values remain unchanged. Retained nesting is limited to 64 levels. Omitting the option
+preserves the full response; error bodies retain their existing behavior. Network permissions, response byte limits,
+and Component execution limits still apply.
+
+Account snapshot `revision` and account page `authRevision` use the same Host-owned account generation. Reading an
+unchanged snapshot preserves it; account state, identity, capabilities, and explicit login/session transitions can
+advance it. Remote history may use `source: "provider-account"`; `qqmusic-account` remains valid for existing providers.
+
 Manifest v1 / API v1-v2 packages keep their existing Worker, style, Scene, storage, and UI contracts. They do not
 select a WIT world and cannot acquire API v3 Provider permissions. A manifest v2 package contains exactly one
 Component and cannot mix legacy entrypoints.

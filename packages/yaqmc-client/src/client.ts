@@ -189,6 +189,16 @@ export class YaqmcClient {
   };
 
   readonly plugins = {
+    updateInfo: (id: string) => this.invoke('plugin_update_policy_get', { id }),
+    setUpdatePolicy: (request: MethodParams['plugin_update_policy_set']['request']) =>
+      this.invoke('plugin_update_policy_set', { request }),
+    checkUpdates: (pluginId?: string) => this.invoke('plugin_update_check', { pluginId }),
+    prepareUpdate: (request: MethodParams['plugin_update_prepare']['request']) =>
+      this.invoke('plugin_update_prepare', { request }),
+    applyUpdate: (request: MethodParams['plugin_update_apply']['request']) =>
+      this.invoke('plugin_update_apply', { request }),
+    updateStatus: (operationId?: string) => this.invoke('plugin_update_status', { operationId }),
+    cancelUpdate: (operationId: string) => this.invoke('plugin_update_cancel', { operationId }),
     list: () => this.invoke('plugin_list'),
     inspectPath: (path: string) => this.invoke('plugin_inspect_path', { path }),
     install: (request: MethodParams['plugin_install']['request']) =>

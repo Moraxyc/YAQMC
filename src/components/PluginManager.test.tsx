@@ -1,10 +1,8 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import i18n from '../i18n';
 import {
   choosePluginFile,
-  inspectPluginPath,
-  installPlugin,
   listPlugins,
   pluginHostSafeMode,
   pluginHostDeveloperMode,
@@ -14,6 +12,24 @@ import {
   type PluginRecord,
 } from '../application/plugin-runtime';
 import { PluginManager } from './PluginManager';
+
+const updates = vi.hoisted(() => ({
+  prepareUpdate: vi.fn(),
+  updateStatus: vi.fn(async () => []),
+  applyUpdate: vi.fn(),
+  updateInfo: vi.fn(async () => ({
+    sources: [],
+    available: [],
+    policy: { channel: 'stable', automatic: false, bound: false, lastResult: null },
+  })),
+}));
+vi.mock('../application/yaqmc-runtime', () => ({
+  getYaqmcClient: () => ({
+    plugins: updates,
+    on: vi.fn(() => () => undefined),
+    invoke: vi.fn(async () => undefined),
+  }),
+}));
 
 vi.mock('../application/host-capabilities', () => ({
   hasHostCapability: (capability: string) => capability === 'plugins',
@@ -46,6 +62,7 @@ describe('PluginManager', () => {
     vi.mocked(setPluginEnabled).mockReset();
     vi.mocked(pluginHostDeveloperMode).mockResolvedValue(false);
     vi.mocked(reloadPlugin).mockReset();
+    updates.prepareUpdate.mockReset();
   });
 
   it('renders the empty plugin list and install control', async () => {
@@ -158,53 +175,72 @@ describe('PluginManager', () => {
     unpackedPath: '/test/provider',
   };
 
-  it('bulk-selects sensitive permissions on installation and clears them without removing ordinary grants', async () => {
+  it('reviews a fixed same-version package and requires confirmation for every new permission', async () => {
     vi.mocked(choosePluginFile).mockResolvedValue('/test/provider.yaqmc-plugin');
-    vi.mocked(inspectPluginPath).mockResolvedValue({
-      sha256: 'a'.repeat(64),
-      compressedBytes: 10,
-      expandedBytes: 20,
-      fileCount: 2,
-      files: [],
-      manifest: { id: providerPlugin.id, name: providerPlugin.name, version: '1.0.0' },
-      permissions: providerPlugin.permissions,
-      scriptScan: { severity: null, findings: [] },
-      styleScan: { severity: null, findings: [] },
+    updates.prepareUpdate.mockResolvedValue({
+      operationId: 'fixed-operation',
+      phase: 'prepared',
+      pluginId: providerPlugin.id,
+      downloadedBytes: 0,
+      totalBytes: null,
+      error: null,
+      preview: {
+        pluginId: providerPlugin.id,
+        name: providerPlugin.name,
+        currentVersion: '1.0.0',
+        version: '1.0.0',
+        sha256: 'b'.repeat(64),
+        release: null,
+        grantedPermissions: ['provider.catalog'],
+        permissions: providerPlugin.permissions,
+        addedPermissions: ['provider.account', 'network:https://example.com'],
+        removedPermissions: [],
+        sessionChanges: [],
+        confirmations: ['replacement', 'unverified-source'],
+        enabled: false,
+      },
+    });
+    updates.applyUpdate.mockResolvedValue({
+      operationId: 'fixed-operation',
+      phase: 'waiting-idle',
+      preview: null,
     });
     render(<PluginManager />);
     fireEvent.click(await screen.findByRole('button', { name: /choose file/i }));
-    const dialog = await screen.findByRole('dialog', { name: 'Review plugin permissions' });
-    const ordinary = within(dialog).getByRole('checkbox', { name: /catalog/i });
-    expect(ordinary).toBeChecked();
-    expect(ordinary).toBeDisabled();
-    fireEvent.click(
-      within(dialog).getByRole('button', { name: 'Select all sensitive permissions' }),
-    );
+    const dialog = await screen.findByRole('dialog', { name: 'Update / replace' });
+    const select = await within(dialog).findByRole('button', {
+      name: 'Select / clear all new permissions',
+    });
+    const apply = within(dialog).getByRole('button', { name: 'Update later (when idle)' });
+    expect(apply).toBeDisabled();
+    fireEvent.click(select);
     expect(
-      within(dialog)
-        .getAllByRole('checkbox')
-        .every((box) => (box as HTMLInputElement).checked),
-    ).toBe(true);
-    fireEvent.click(
-      within(dialog).getByRole('button', { name: 'Clear all sensitive permissions' }),
-    );
-    expect(ordinary).toBeChecked();
+      within(dialog).getByRole('checkbox', { name: 'Manage this provider instance account' }),
+    ).toBeChecked();
+    fireEvent.click(select);
     expect(
-      within(dialog)
-        .getAllByRole('checkbox')
-        .filter((box) => !(box as HTMLInputElement).disabled)
-        .every((box) => !(box as HTMLInputElement).checked),
-    ).toBe(true);
+      within(dialog).getByRole('checkbox', { name: 'Manage this provider instance account' }),
+    ).not.toBeChecked();
+    fireEvent.click(select);
+    expect(apply).toBeDisabled();
     fireEvent.click(
-      within(dialog).getByRole('button', { name: 'Select all sensitive permissions' }),
-    );
-    fireEvent.click(within(dialog).getByRole('button', { name: /install|accept/i }));
-    await waitFor(() =>
-      expect(installPlugin).toHaveBeenCalledWith('/test/provider.yaqmc-plugin', {
-        enable: true,
-        grant: providerPlugin.permissions,
+      within(dialog).getByRole('checkbox', {
+        name: 'I have reviewed these changes and confirm the replacement',
       }),
     );
+    fireEvent.click(apply);
+    await waitFor(() =>
+      expect(updates.applyUpdate).toHaveBeenCalledWith({
+        operationId: 'fixed-operation',
+        grant: providerPlugin.permissions,
+        confirm: true,
+        stopUsing: false,
+      }),
+    );
+    expect(updates.prepareUpdate).toHaveBeenCalledWith({
+      path: '/test/provider.yaqmc-plugin',
+      unpacked: false,
+    });
   });
 
   it('allows bulk approval during re-enable review without enabling until confirmed', async () => {
@@ -281,40 +317,44 @@ describe('PluginManager', () => {
     expect(setPluginEnabled).not.toHaveBeenCalled();
   });
 
-  it('reports reload failures and prevents concurrent detail mutations', async () => {
+  it('routes developer reload through preparation without retiring the installed plugin', async () => {
     vi.mocked(listPlugins).mockResolvedValue([providerPlugin]);
     vi.mocked(pluginHostDeveloperMode).mockResolvedValue(true);
-    let rejectReload!: (error: Error) => void;
-    vi.mocked(reloadPlugin).mockImplementation(
-      () =>
-        new Promise((_, reject) => {
-          rejectReload = reject;
-        }),
-    );
+    updates.prepareUpdate.mockRejectedValueOnce(new Error('Component validation failed'));
     render(<PluginManager />);
     fireEvent.click(await screen.findByRole('button', { name: 'Open Test provider details' }));
     const dialog = screen.getByRole('dialog', { name: providerPlugin.name });
     fireEvent.click(within(dialog).getByRole('button', { name: /reload/i }));
-    expect(within(dialog).getByRole('button', { name: /reload/i })).toBeDisabled();
-    expect(within(dialog).getByRole('button', { name: /^uninstall$/i })).toBeDisabled();
-    await act(async () => rejectReload(new Error('Component validation failed')));
     expect(await screen.findByRole('alert')).toHaveTextContent('Component validation failed');
-    expect(within(dialog).getByRole('button', { name: /reload/i })).toBeEnabled();
+    expect(updates.prepareUpdate).toHaveBeenCalledWith({
+      pluginId: providerPlugin.id,
+      path: providerPlugin.unpackedPath,
+      unpacked: true,
+    });
+    expect(reloadPlugin).not.toHaveBeenCalled();
+    expect(setPluginEnabled).not.toHaveBeenCalled();
   });
 
-  it('refreshes open details after a successful reload', async () => {
+  it('shows identical-content feedback without invoking the legacy reload method', async () => {
     vi.mocked(listPlugins).mockResolvedValue([providerPlugin]);
     vi.mocked(pluginHostDeveloperMode).mockResolvedValue(true);
-    vi.mocked(reloadPlugin).mockImplementation(async () => {
-      const next = { ...providerPlugin, description: 'Updated description', version: '1.1.0' };
-      vi.mocked(listPlugins).mockResolvedValue([next]);
-      return next;
+    updates.prepareUpdate.mockResolvedValueOnce({
+      operationId: 'same',
+      phase: 'unchanged',
+      pluginId: providerPlugin.id,
+      preview: null,
+      downloadedBytes: 0,
+      totalBytes: null,
+      error: null,
+      runtimeChanged: false,
     });
     render(<PluginManager />);
     fireEvent.click(await screen.findByRole('button', { name: 'Open Test provider details' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /reload/i }));
-    expect(await screen.findByText('Updated description')).toBeInTheDocument();
-    expect(screen.queryByText('Test description')).not.toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Identical content; no reinstall needed',
+    );
+    expect(reloadPlugin).not.toHaveBeenCalled();
   });
 
   it('reports clipboard failures instead of leaving an unhandled rejection', async () => {

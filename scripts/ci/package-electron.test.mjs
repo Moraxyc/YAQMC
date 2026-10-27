@@ -155,6 +155,8 @@ test('parseElectronPackageArgs treats --dry-run as a boolean', () => {
 
 test('stages named Electron artifacts and checksums without unpacked trees', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'yaqmc-electron-stage-'));
+  mkdirSync(path.join(root, 'apps/desktop'), { recursive: true });
+  writeFileSync(path.join(root, 'apps/desktop/package.json'), '{"version":"0.1.1"}');
   for (const name of electronArtifactNames({ os: 'windows', arch: 'x64' })) {
     writeFileSync(path.join(root, name), name);
   }
@@ -192,7 +194,12 @@ test('stages named Electron artifacts and checksums without unpacked trees', () 
   assert.equal(buildInfo.lto, 'thin');
   assert.deepEqual(
     buildInfo.files.map(({ name }) => name),
-    ['YAQMC-windows-x64-setup.exe', 'YAQMC-windows-x64-portable.exe', 'latest.yml'],
+    [
+      'YAQMC-windows-x64-setup.exe',
+      'YAQMC-windows-x64-portable.exe',
+      'latest.yml',
+      'updater-windows-x64.yml',
+    ],
   );
   assert.ok(buildInfo.files.every(({ sha256 }) => /^[0-9a-f]{64}$/u.test(sha256)));
   const sums = readFileSync(path.join(dest, 'SHA256SUMS-electron-windows-x64.txt'), 'utf8');

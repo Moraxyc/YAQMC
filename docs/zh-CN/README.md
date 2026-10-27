@@ -8,6 +8,7 @@
 
 - 开始使用：[Android](android.md)、[数据位置、升级及卸载](data-locations.md)、[外观个性化](appearance.md)和
   [Linux 运行环境](linux.md)
+- [应用内更新与 Release 提交概述](app-updates.md)
 - 浏览与账号：[登录与安全存储](authentication.md)、[账号音乐库](account-library.md)、
   [会员模型](account-membership.md)、[首页推荐](home-recommendations.md)和[发现页](discover.md)
 - 播放：[播放系统](playback.md)、[渐进式流媒体](streaming.md)、[音质分类](audio-quality.md)和

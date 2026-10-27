@@ -33,6 +33,7 @@ pub struct ComponentHostServices {
 }
 
 struct ComponentHostServicesInner {
+    staging: bool,
     data_root: PathBuf,
     cache_root: PathBuf,
     credentials: Arc<dyn CredentialStore>,
@@ -141,6 +142,7 @@ impl ComponentHostServices {
             .map_err(|_| "component cache directory could not be created".to_owned())?;
         Ok(Self {
             inner: Arc::new(ComponentHostServicesInner {
+                staging: false,
                 data_root,
                 cache_root,
                 credentials,
@@ -174,7 +176,18 @@ impl ComponentHostServices {
         allowed_origins: HashSet<String>,
         settings: serde_json::Value,
     ) -> ComponentHostContext {
-        let namespace = namespace_id(plugin_id, provider_id);
+        self.for_plugin_session(plugin_id, provider_id, allowed_origins, settings, None)
+    }
+
+    pub(crate) fn for_plugin_session(
+        &self,
+        plugin_id: &str,
+        provider_id: &str,
+        allowed_origins: HashSet<String>,
+        settings: serde_json::Value,
+        epoch: Option<&str>,
+    ) -> ComponentHostContext {
+        let namespace = session_namespace(plugin_id, provider_id, epoch);
         let state = {
             let mut namespaces = self
                 .inner
@@ -206,8 +219,73 @@ impl ComponentHostServices {
         self.inner.runtime.clone()
     }
 
+    pub(crate) fn stage_update(
+        &self,
+        directory: &Path,
+        namespaces: Vec<String>,
+    ) -> Result<Self, String> {
+        let journal = super::updates::storage::DataJournal {
+            data_root: self.inner.data_root.clone(),
+            cache_root: self.inner.cache_root.clone(),
+            namespaces,
+        };
+        journal.prepare(directory)?;
+        let credentials = Arc::new(super::updates::storage::CredentialOverlay::new(
+            self.inner.credentials.clone(),
+            directory,
+            journal.namespaces.clone(),
+        ));
+        let mut staged = Self::open(
+            directory.join("data"),
+            directory.join("cache"),
+            credentials,
+            self.inner.runtime.clone(),
+        )?;
+        Arc::get_mut(&mut staged.inner)
+            .expect("new staged services")
+            .staging = true;
+        Ok(staged)
+    }
+
+    pub(crate) fn finish_update(&self, directory: &Path, committed: bool) -> Result<(), String> {
+        let journal_path = directory.join("data-journal.json");
+        if journal_path.exists() {
+            let journal = read_json::<super::updates::storage::DataJournal>(journal_path)
+                .ok_or("update-journal-invalid")?;
+            if journal.data_root != self.inner.data_root
+                || journal.cache_root != self.inner.cache_root
+            {
+                return Err("update-journal-invalid".into());
+            }
+            if !committed {
+                journal.install(directory, true)?;
+            }
+            let mut namespaces = self
+                .inner
+                .namespaces
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            for namespace in journal.namespaces {
+                namespaces.remove(&namespace);
+            }
+        }
+        super::updates::storage::recover_credentials(
+            directory,
+            self.inner.credentials.as_ref(),
+            committed,
+        )?;
+        Ok(())
+    }
+
     pub fn remove_plugin_data(&self, plugin_id: &str, provider_id: &str) -> Result<(), String> {
         let namespace = namespace_id(plugin_id, provider_id);
+        self.remove_namespace_data(&namespace)
+    }
+
+    pub(crate) fn remove_namespace_data(&self, namespace: &str) -> Result<(), String> {
+        if !super::updates::valid_sha256(namespace) {
+            return Err("update-namespace-invalid".into());
+        }
         let _filesystem = self
             .inner
             .filesystem
@@ -231,7 +309,7 @@ impl ComponentHostServices {
             .namespaces
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&namespace);
+            .remove(namespace);
         Ok(())
     }
 
@@ -284,6 +362,9 @@ impl ComponentHostServices {
 }
 
 impl ComponentHostContext {
+    pub(crate) fn staging(&self) -> bool {
+        self.services.inner.staging
+    }
     pub fn revoke(&self) {
         self.revoked.store(true, Ordering::Release);
     }
@@ -628,6 +709,13 @@ impl ComponentHostContext {
 
 fn namespace_id(plugin_id: &str, provider_id: &str) -> String {
     hash_text(&format!("{plugin_id}\0{provider_id}"))
+}
+
+pub(crate) fn session_namespace(plugin_id: &str, provider_id: &str, epoch: Option<&str>) -> String {
+    match epoch {
+        Some(epoch) => hash_text(&format!("{plugin_id}\0{provider_id}\0{epoch}")),
+        None => namespace_id(plugin_id, provider_id),
+    }
 }
 
 fn credential_account(namespace: &str, handle: &str) -> String {

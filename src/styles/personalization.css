@@ -145,6 +145,20 @@
   justify-self: end;
 }
 
+.settings-row.settings-row--update-summary {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-row.settings-row--update-summary > :last-child,
+.settings-row.settings-row--update-progress > div:first-child {
+  justify-self: stretch;
+  min-width: 0;
+}
+
+.settings-row--update-progress progress {
+  width: 100%;
+}
+
 .settings-range {
   display: grid;
   grid-template-columns: minmax(150px, 210px) 68px;

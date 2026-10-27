@@ -25,6 +25,7 @@ permissions:
 
 env:
   YAQMC_BUILD_PROFILE: production
+  YAQMC_RELEASE_CHANNEL: ${{ contains(github.ref_name, '-') && 'prerelease' || 'stable' }}
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
   CARGO_PROFILE_RELEASE_LTO: 'true'
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '1'
@@ -225,6 +226,8 @@ jobs:
           --os ${{ matrix.os }}
           --arch ${{ matrix.arch }}
           --require-signing false
+      - name: Test native updater replacement and recovery
+        run: cargo test -p yaqmc-update-helper --locked
       - name: Verify Windows unsigned release artifacts
         if: matrix.os == 'windows'
         shell: pwsh
@@ -286,6 +289,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
       - name: Checkout exact qm-api-rs corresponding source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -327,6 +332,20 @@ jobs:
           --to assembled
           --commit ${{ github.sha }}
           --targets ${{ inputs.targets || 'all' }}
+      - run: npm ci --ignore-scripts
+      - name: Generate release overview from commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/${GH_REPO}/releases?per_page=100" > published-releases.json
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v$(node -p "require('./package.json').version")"
+          fi
+          node scripts/ci/release-commits.mjs --commit "$GITHUB_SHA" --tag "$tag" --published published-releases.json --to assembled
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: YAQMC-release-draft-${{ github.sha }}
@@ -363,6 +382,11 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "YAQMC ${tag} (draft)" \
             --notes-file assembled/RELEASE-NOTES.md
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            gh release edit "$tag" --draft=false --prerelease=false --latest --title "YAQMC $tag"
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            version_tag="${tag%%+*}"
+            if [[ "$version_tag" == *-* ]]; then
+              gh release edit "$tag" --draft=false --prerelease=true --latest=false --title "YAQMC $tag"
+            else
+              gh release edit "$tag" --draft=false --prerelease=false --latest --title "YAQMC $tag"
+            fi
           fi

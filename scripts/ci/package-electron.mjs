@@ -1,5 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { repositoryRoot } from './repo.mjs';
@@ -8,6 +15,8 @@ import { verifyBinaryFile } from './verify-binary-arch.mjs';
 import { sha256File, writeBuildInfo } from './write-build-info.mjs';
 import { findCoreBinary, stageCore } from '../stage-core.mjs';
 import { stripQaLaunchFlags } from '../qa-runtime.mjs';
+import { stageUpdateHelper } from '../stage-update-helper.mjs';
+import { writeAppUpdateMetadata } from './app-update-metadata.mjs';
 
 export const ELECTRON_OUTPUT_DIR_NAME = 'release-electron';
 export const ELECTRON_RELEASE_CONFIG = 'electron-builder.release.yml';
@@ -92,6 +101,16 @@ export function planElectronPackage({ os, arch, target, cross, requireSigning = 
   const resolvedCross = cross ?? isElectronCoreCross({ os, arch });
   return {
     cargo: ['cargo', ...cargoBuildArgs(target)],
+    helperBuild: [
+      'cargo',
+      'build',
+      '-p',
+      'yaqmc-update-helper',
+      '--release',
+      '--locked',
+      '--target',
+      target,
+    ],
     clientBuild: ['npm', 'run', 'build', '-w', '@yaqmc/client'],
     frontendBuild: ['npm', 'run', 'ci:frontend-build'],
     desktopBuild: ['npm', 'run', 'build', '-w', '@yaqmc/desktop'],
@@ -140,6 +159,12 @@ export function stageElectronArtifacts({
     }
   }
   if (buildInfo) {
+    if (platform === 'windows') {
+      const version = JSON.parse(
+        readFileSync(path.join(repoRoot, 'apps/desktop/package.json'), 'utf8'),
+      ).version;
+      copied.push(writeAppUpdateMetadata(destDir, version, arch));
+    }
     const buildInfoName = `build-info-${platform}-${arch}.json`;
     writeBuildInfo({
       ...buildInfo,
@@ -211,6 +236,7 @@ function main() {
   });
   const packageEnv = packagingEnvironment();
   const buildEnv = packagingBuildEnvironment(packageEnv);
+  buildEnv.YAQMC_PACKAGE_ARCH = arch;
 
   if (options.dryRun) {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
@@ -224,6 +250,8 @@ function main() {
   }
 
   run(plan.cargo[0], plan.cargo.slice(1), { env: buildEnv });
+  run(plan.helperBuild[0], plan.helperBuild.slice(1), { env: buildEnv });
+  stageUpdateHelper({ repoRoot: repositoryRoot, env: buildEnv, rustTarget: target });
   const coreBinary = findCoreBinary({
     repoRoot: repositoryRoot,
     profile: 'release',

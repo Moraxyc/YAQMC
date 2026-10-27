@@ -36,6 +36,7 @@ apps/desktop/resources/core/yaqmc-core
 apps/desktop/resources/core/yaqmc-core.exe
 apps/desktop/resources/core/core.sha256
 apps/desktop/resources/core/manifest.json
+apps/desktop/resources/updater/
 
 # Android generated outputs and local SDK configuration
 apps/android/android/.gradle/

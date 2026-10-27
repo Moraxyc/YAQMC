@@ -94,3 +94,5 @@ export {
   type ShutdownReason,
 } from './protocol/types';
 export type * from './protocol/dto';
+export type * from './protocol/plugin-updates';
+export type * from './protocol/app-updates';

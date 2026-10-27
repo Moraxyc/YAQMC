@@ -24,7 +24,7 @@ pub struct CoreRuntime<H> {
     #[cfg(feature = "plugins")]
     plugin_events: Arc<dyn EventSink>,
     #[cfg(feature = "plugins")]
-    plugin_event_sequence: AtomicU64,
+    plugin_event_sequence: Arc<AtomicU64>,
 }
 
 impl<H> CoreRuntime<H>
@@ -68,13 +68,50 @@ where
             Arc::clone(&sink),
         );
 
+        #[cfg(feature = "plugins")]
+        let plugin_event_sequence = Arc::new(AtomicU64::new(0));
+        #[cfg(feature = "plugins")]
+        {
+            let plugins = core.plugins();
+            plugins.start_update_service(Arc::downgrade(&core));
+            let mut updates = plugins.subscribe_updates();
+            let events = sink.clone();
+            let sequence = plugin_event_sequence.clone();
+            let weak = Arc::downgrade(&plugins);
+            let shutdown = plugins.update_shutdown();
+            tokio::spawn(async move {
+                loop {
+                    match tokio::select! { _ = shutdown.cancelled() => break, result = updates.recv() => result }
+                    {
+                        Ok(update) => {
+                            events.emit(
+                                sequence.fetch_add(1, Ordering::Relaxed) + 1,
+                                yaqmc_protocol::CHANNEL_PLUGIN_UPDATE_PROGRESS,
+                                &serde_json::to_value(&update).unwrap_or_default(),
+                            );
+                            if update.terminal() && update.runtime_changed {
+                                if let (Some(plugins), Some(id)) =
+                                    (weak.upgrade(), &update.plugin_id)
+                                {
+                                    let enabled =
+                                        plugins.list().iter().any(|r| &r.id == id && r.enabled);
+                                    events.emit(sequence.fetch_add(1, Ordering::Relaxed) + 1, yaqmc_protocol::CHANNEL_PLUGIN_CHANGED, &serde_json::json!({"pluginId": id, "enabled": enabled, "updateOperationId": update.operation_id}));
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
         Self {
             core,
             host: Arc::new(host),
             #[cfg(feature = "plugins")]
             plugin_events: sink,
             #[cfg(feature = "plugins")]
-            plugin_event_sequence: AtomicU64::new(0),
+            plugin_event_sequence,
         }
     }
 
@@ -166,6 +203,8 @@ where
 
     /// Persist playback state and stop all Core-owned workers.
     pub async fn shutdown(&self, graceful: bool) {
+        #[cfg(feature = "plugins")]
+        self.core.plugins().stop_update_service();
         let snapshot = self.core.player().snapshot().await;
         if let Err(error) = self.core.storage().save_queue(&snapshot) {
             tracing::warn!(target: "storage", error = %error, "queue persistence failed during shutdown");

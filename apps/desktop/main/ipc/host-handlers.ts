@@ -432,6 +432,10 @@ export type HostUpdaterDeps = {
   check: () => Promise<unknown>;
   download: () => Promise<unknown>;
   install: () => Promise<unknown>;
+  start?: (candidateId: string) => Promise<unknown>;
+  status?: () => unknown;
+  cancel?: () => Promise<unknown>;
+  preferences?: (includePrerelease: boolean) => Promise<unknown>;
 };
 
 export type HostWindowChrome = {
@@ -876,6 +880,30 @@ export function createHostHandlers(deps: HostHandlerDeps): Record<string, HostHa
     handlers[HOST_UPDATER_CHECK_METHOD] = async () => updater.check();
     handlers[HOST_UPDATER_DOWNLOAD_METHOD] = async () => updater.download();
     handlers[HOST_UPDATER_INSTALL_METHOD] = async () => updater.install();
+    handlers.host_updater_status = async () => updater.status?.();
+    handlers.host_updater_cancel = async () => updater.cancel?.();
+    handlers.host_updater_start = async (params) => {
+      const value = params as { candidateId?: unknown };
+      if (
+        !value ||
+        typeof value.candidateId !== 'string' ||
+        Object.keys(value).some((k) => k !== 'candidateId')
+      ) {
+        throw new Error('update-candidate-invalid');
+      }
+      return updater.start?.(value.candidateId);
+    };
+    handlers.host_updater_preferences = async (params) => {
+      const value = params as { includePrerelease?: unknown };
+      if (
+        !value ||
+        typeof value.includePrerelease !== 'boolean' ||
+        Object.keys(value).some((k) => k !== 'includePrerelease')
+      ) {
+        throw new Error('update-preferences-invalid');
+      }
+      return updater.preferences?.(value.includePrerelease);
+    };
   }
 
   if (deps.windowChrome) {

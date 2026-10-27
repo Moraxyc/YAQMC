@@ -856,6 +856,33 @@ fn decode_id(value: &str) -> Option<RoutedId> {
     .then_some(route)
 }
 
+/// Include the underlying member when a playing track is wrapped by another
+/// plugin's federation. Metadata ownership alone is not the playback boundary.
+pub(crate) fn song_uses_providers(
+    song: &Song,
+    providers: &std::collections::HashSet<String>,
+) -> bool {
+    if song
+        .provider
+        .as_ref()
+        .is_some_and(|p| providers.contains(&p.provider_id))
+    {
+        return true;
+    }
+    let mut id = song.id.clone();
+    for _ in 0..8 {
+        let Some(route) = decode_id(&id) else {
+            return false;
+        };
+        if providers.contains(&route.provider_id) {
+            return true;
+        }
+        id = route.track_id;
+    }
+    // Malformed nesting must never make an automatic update interrupt playback.
+    true
+}
+
 fn restore_song(route: &RoutedId, song: &Song) -> Option<Song> {
     let mut source = song.clone();
     source.id = route.track_id.clone();
@@ -1053,6 +1080,15 @@ mod tests {
         assert_eq!(decoded.provider_id, "org.example.spotify");
         assert_eq!(decoded.profile_id, "work");
         assert_eq!(decoded.track_id, "track/1");
+        let wrapped = source_song("org.example.aggregate", &encoded, &encoded);
+        assert!(super::song_uses_providers(
+            &wrapped,
+            &std::collections::HashSet::from(["org.example.spotify".into()])
+        ));
+        assert!(!super::song_uses_providers(
+            &wrapped,
+            &std::collections::HashSet::from(["org.example.other".into()])
+        ));
     }
 
     fn source_song(provider_id: &str, catalog_id: &str, track_id: &str) -> Song {

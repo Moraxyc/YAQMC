@@ -1,3 +1,5 @@
+import { zhTW as pluginUpdates } from './plugin-updates';
+import { appUpdatesZhTW } from './app-updates';
 import type { enUS } from './en-US';
 
 type TranslationShape<T> = {
@@ -629,7 +631,6 @@ export const zhTW = {
   settings: {
     updates: {
       title: '更新',
-      description: '檢查 YAQMC 新版本。更新不會靜默安裝。',
       check: '檢查更新',
       checking: '正在檢查更新…',
       availableManualVersion: '發現新版本 {{version}}。此安裝包不支援原位更新，請打開發行頁面。',
@@ -645,14 +646,12 @@ export const zhTW = {
       installFailed: '無法重啟並安裝更新。',
       idle: '尚未檢查更新。',
       download: '下載',
-      downloadDescription: '僅在點選後開始下載，不會在後臺安裝。',
-      downloadAction: '下載更新',
       release: '發行頁面',
       androidReleaseDescription: 'Android 會開啟 GitHub Releases 上的簽名 APK，不會自動安裝。',
-      releaseDescription: 'deb / rpm / tar.gz 安裝包不支援原位更新。',
       releaseAction: '打開發行頁面',
       install: '重啟並安裝',
       installDescription: '僅在點選後安裝，播放將停止。',
+      ...appUpdatesZhTW,
     },
     eyebrow: '應用',
     title: '設定',
@@ -928,6 +927,7 @@ export const zhTW = {
       resetPosition: '重置位置',
     },
     plugins: {
+      updates: pluginUpdates,
       title: '外掛',
       description:
         '安裝本地 YAQMC 執行時外掛，用於樣式、歌詞場景和隔離指令碼。這些不是 Electron 擴充套件。',

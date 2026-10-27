@@ -1,3 +1,5 @@
+import { enUS as pluginUpdates } from './plugin-updates';
+import { appUpdatesEnUS } from './app-updates';
 export const enUS = {
   common: {
     projectName: 'YAQMC',
@@ -635,7 +637,6 @@ export const enUS = {
   settings: {
     updates: {
       title: 'Updates',
-      description: 'Check for a new YAQMC release. Updates are never installed silently.',
       check: 'Check for updates',
       checking: 'Checking for updates…',
       availableManualVersion:
@@ -653,15 +654,13 @@ export const enUS = {
       installFailed: 'Could not restart to install.',
       idle: 'No update check has run yet.',
       download: 'Download',
-      downloadDescription: 'Starts only after you click. Nothing installs in the background.',
-      downloadAction: 'Download update',
       release: 'Release page',
       androidReleaseDescription:
         'Android opens the signed APK on GitHub Releases and never installs it automatically.',
-      releaseDescription: 'deb / rpm / tar.gz builds cannot update in place.',
       releaseAction: 'Open release page',
       install: 'Restart to install',
       installDescription: 'Installs only after you click. Playback will stop.',
+      ...appUpdatesEnUS,
     },
     eyebrow: 'APPLICATION',
     title: 'Settings',
@@ -947,6 +946,7 @@ export const enUS = {
       resetPosition: 'Reset position',
     },
     plugins: {
+      updates: pluginUpdates,
       title: 'Plugins',
       description:
         'Install local YAQMC runtime plugins for styles, lyrics scenes, and isolated scripts. These are not Electron extensions.',

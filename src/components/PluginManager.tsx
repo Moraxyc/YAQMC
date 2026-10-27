@@ -14,22 +14,19 @@ import { hasHostCapability } from '../application/host-capabilities';
 import {
   choosePluginDirectory,
   choosePluginFile,
-  inspectPluginPath,
-  installPlugin,
-  installUnpackedPlugin,
   listPlugins,
   pluginDiagnosticsText,
   pluginHostDeveloperMode,
   pluginHostSafeMode,
-  reloadPlugin,
   setPluginDeveloperMode,
   setPluginEnabled,
   setPluginSafeMode,
   uninstallPlugin,
-  type PluginInspectResult,
   type PluginRecord,
 } from '../application/plugin-runtime';
 import { PluginSettingsForm } from './PluginSettingsForm';
+import { PluginUpdatePanel } from './PluginUpdatePanel';
+import type { PluginUpdatePrepareRequest } from '@yaqmc/client';
 
 function permissionKey(permission: string): string {
   if (permission.startsWith('network:')) return 'network_origin';
@@ -71,17 +68,6 @@ function pluginStatusLabel(status: PluginRecord['status'], t: (key: string) => s
   return t(`status.${status}`);
 }
 
-function permissionChanges(
-  previous: string[] | null,
-  next: string[],
-): { added: string[]; removed: string[] } {
-  if (!previous) return { added: [], removed: [] };
-  return {
-    added: next.filter((item) => !previous.includes(item)),
-    removed: previous.filter((item) => !next.includes(item)),
-  };
-}
-
 export function PluginManager() {
   const { t } = useTranslation('settings', { keyPrefix: 'plugins' });
   const [plugins, setPlugins] = useState<PluginRecord[]>([]);
@@ -89,12 +75,9 @@ export function PluginManager() {
   const [developerMode, setDeveloperMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [inspect, setInspect] = useState<PluginInspectResult | null>(null);
-  const [pendingPath, setPendingPath] = useState<string | null>(null);
-  const [pendingUnpacked, setPendingUnpacked] = useState(false);
-  const [grant, setGrant] = useState<string[]>([]);
+  const [updateRequest, setUpdateRequest] = useState<PluginUpdatePrepareRequest | null>(null);
+  const [updateId, setUpdateId] = useState<string | null>(null);
   const [detailsId, setDetailsId] = useState<string | null>(null);
-  const [installedPermissions, setInstalledPermissions] = useState<string[] | null>(null);
   const [enableReviewId, setEnableReviewId] = useState<string | null>(null);
   const [enableGrants, setEnableGrants] = useState<string[]>([]);
   const actionPending = useRef(false);
@@ -133,13 +116,8 @@ export function PluginManager() {
   }, [refresh]);
 
   const beginReview = async (path: string, unpacked: boolean) => {
-    const next = await inspectPluginPath(path);
-    const existing = plugins.find((plugin) => plugin.id === next.manifest.id);
-    setInspect(next);
-    setPendingPath(path);
-    setPendingUnpacked(unpacked);
-    setInstalledPermissions(existing ? existing.permissions : null);
-    setGrant(next.permissions.filter((permission) => !isSensitivePermission(permission)));
+    setUpdateRequest({ path, unpacked });
+    setUpdateId(null);
   };
 
   const handleInstall = async () => {
@@ -150,11 +128,6 @@ export function PluginManager() {
       if (!path) return;
       if (path.toLowerCase().endsWith('.ts')) {
         setError(t('typescriptRequiresBuild'));
-        return;
-      }
-      if (path.toLowerCase().endsWith('.css')) {
-        await installPlugin(path, { enable: true, grant: [] });
-        await refresh();
         return;
       }
       await beginReview(path, false);
@@ -172,27 +145,6 @@ export function PluginManager() {
       const path = await choosePluginDirectory();
       if (!path) return;
       await beginReview(path, true);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const confirmInstall = async () => {
-    if (!pendingPath) return;
-    setBusy(true);
-    setError(null);
-    try {
-      if (pendingUnpacked) {
-        await installUnpackedPlugin(pendingPath, { enable: true, grant });
-      } else {
-        await installPlugin(pendingPath, { enable: true, grant });
-      }
-      setInspect(null);
-      setPendingPath(null);
-      setInstalledPermissions(null);
-      await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -294,10 +246,6 @@ export function PluginManager() {
       setBusy(false);
     }
   };
-
-  const reviewDelta = inspect
-    ? permissionChanges(installedPermissions, inspect.permissions)
-    : { added: [], removed: [] };
 
   const sensitiveGrantsButton = (
     permissions: string[],
@@ -505,6 +453,18 @@ export function PluginManager() {
                 <div className="plugin-card__actions">
                   <button
                     type="button"
+                    className="button button--quiet"
+                    disabled={busy}
+                    onClick={() => {
+                      setUpdateRequest(null);
+                      setUpdateId(plugin.id);
+                      setDetailsId(null);
+                    }}
+                  >
+                    <RefreshCw size={14} /> {t('updates.title')}
+                  </button>
+                  <button
+                    type="button"
                     className="button button--quiet plugin-card__toggle"
                     aria-pressed={plugin.enabled}
                     disabled={
@@ -520,95 +480,37 @@ export function PluginManager() {
           })}
         </ul>
       )}
-      {inspect && (
-        <div className="plugin-review" role="dialog" aria-label={t('reviewTitle')}>
-          <h3>{t('reviewTitle')}</h3>
-          <p>
-            {inspect.manifest.name} {inspect.manifest.version} · API{' '}
-            {inspect.manifest.apiVersion ?? 1}
-          </p>
-          <p>
-            SHA-256: <code>{inspect.sha256}</code>
-          </p>
-          <p>{t('unsigned')}</p>
-          {inspect.manifest.provider && (
-            <p>
-              {t('provider')}: {inspect.manifest.provider.id} · WIT{' '}
-              {inspect.manifest.provider.witVersion} · {inspect.manifest.provider.world}
-            </p>
-          )}
-          <ul>
-            {inspect.permissions.map((permission) => (
-              <li key={permission}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={grant.includes(permission)}
-                    disabled={busy || !isSensitivePermission(permission)}
-                    onChange={(event) => {
-                      setGrant((current) =>
-                        event.target.checked
-                          ? [...current, permission]
-                          : current.filter((value) => value !== permission),
-                      );
-                    }}
-                  />
-                  {permissionLabel(permission, t)}
-                  {isSensitivePermission(permission) ? ` (${t('sensitive')})` : ''}
-                </label>
-              </li>
-            ))}
-          </ul>
-          {sensitiveGrantsButton(inspect.permissions, grant, setGrant)}
-          {reviewDelta.added.length > 0 && (
-            <p>
-              {t('permissionsAdded')}: {reviewDelta.added.join(', ')}
-            </p>
-          )}
-          {reviewDelta.removed.length > 0 && (
-            <p>
-              {t('permissionsRemoved')}: {reviewDelta.removed.join(', ')}
-            </p>
-          )}
-          <p>
-            {t('deniedCapabilities')}: {t('deniedList')}
-          </p>
-          {(inspect.scriptScan.findings.length > 0 || inspect.styleScan.findings.length > 0) && (
-            <pre className="plugin-scan">
-              {[...inspect.styleScan.findings, ...inspect.scriptScan.findings]
-                .map((finding) => `${finding.kind}: ${finding.count} — ${finding.detail}`)
-                .join('\n')}
-            </pre>
-          )}
-          <div className="plugin-review__actions">
-            <button
-              type="button"
-              className="button button--quiet"
-              disabled={busy}
-              onClick={() => {
-                setInspect(null);
-                setPendingPath(null);
-                setPendingUnpacked(false);
-                setInstalledPermissions(null);
-              }}
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="button"
-              className="button"
-              disabled={busy}
-              onClick={() => void confirmInstall()}
-            >
-              {t('accept')}
-            </button>
-          </div>
-        </div>
+      {(updateRequest || updateId) && (
+        <PluginUpdatePanel
+          key={updateId ?? updateRequest?.path}
+          plugin={plugins.find((p) => p.id === updateId)}
+          request={updateRequest ?? undefined}
+          onChanged={refresh}
+          onClose={() => {
+            setUpdateRequest(null);
+            setUpdateId(null);
+          }}
+        />
       )}
       {details && (
         <div className="plugin-review" role="dialog" aria-label={details.name}>
           <h3>{details.name}</h3>
           <p>{details.description}</p>
+          <p>
+            {details.release?.channel ?? 'stable'} ·{' '}
+            {details.release?.buildId ?? t('updates.legacyBuild')}
+          </p>
+          <button
+            type="button"
+            className="button button--quiet"
+            onClick={() => {
+              setUpdateRequest(null);
+              setUpdateId(details.id);
+              setDetailsId(null);
+            }}
+          >
+            {t('updates.title')}
+          </button>
           <p>
             {details.id} · {details.version} · API {details.apiVersion}
           </p>
@@ -667,12 +569,15 @@ export function PluginManager() {
                 type="button"
                 className="button button--quiet"
                 disabled={busy}
-                onClick={() =>
-                  void runDetailAction(async () => {
-                    await reloadPlugin(details.id);
-                    await refresh();
-                  })
-                }
+                onClick={() => {
+                  setUpdateRequest({
+                    pluginId: details.id,
+                    path: details.unpackedPath!,
+                    unpacked: true,
+                  });
+                  setUpdateId(details.id);
+                  setDetailsId(null);
+                }}
               >
                 <RefreshCw size={14} /> {t('reload')}
               </button>

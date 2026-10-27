@@ -183,6 +183,15 @@ pub const CORE_DISPATCH_METHODS: &[&str] = &[
     "issue_reporter_preview",
     "issue_reporter_validate_url",
     "plugin_list",
+    "plugin_update_policy_get",
+    "plugin_update_policy_set",
+    "plugin_update_check",
+    "plugin_update_prepare",
+    "plugin_update_apply",
+    "plugin_update_status",
+    "plugin_update_cancel",
+    "plugin_update_runtime_ready",
+    "plugin_update_editing",
     "plugin_inspect_path",
     "plugin_install",
     "plugin_set_enabled",
@@ -203,6 +212,7 @@ pub const CORE_DISPATCH_METHODS: &[&str] = &[
     "core_ping",
     "platform_attach",
     "core_shutdown_prepare",
+    "core_shutdown_cancel",
     "auth_oauth_prepare",
     "auth_oauth_complete",
     "auth_oauth_cancel",
@@ -1763,6 +1773,98 @@ async fn invoke_core(
             cmd(crate::issue_reporter::validate_open_url(&url).map_err(str::to_owned))
         }
         #[cfg(feature = "plugins")]
+        "plugin_update_policy_get" => {
+            let IdParams { id } = parse(&params)?;
+            ok(core.plugins().update_info(&id))
+        }
+        #[cfg(feature = "plugins")]
+        "plugin_update_policy_set" => {
+            let NamedRequest::<crate::plugin::updates::PolicyRequest> { request } = parse(&params)?;
+            cmd(core
+                .plugins()
+                .set_update_policy(request)
+                .map_err(|e| e.to_string()))
+        }
+        #[cfg(feature = "plugins")]
+        "plugin_update_prepare" => {
+            let NamedRequest::<crate::plugin::updates::PrepareRequest> { request } =
+                parse(&params)?;
+            cmd(core
+                .plugins()
+                .prepare_update(request)
+                .map_err(|e| e.to_string()))
+        }
+        #[cfg(feature = "plugins")]
+        "plugin_update_apply" => {
+            let NamedRequest::<crate::plugin::updates::ApplyRequest> { request } = parse(&params)?;
+            cmd(core
+                .plugins()
+                .apply_update(request)
+                .map_err(|e| e.to_string()))
+        }
+        #[cfg(feature = "plugins")]
+        "plugin_update_runtime_ready" => {
+            let NamedRequest::<crate::plugin::updates::RuntimeReadyRequest> { request } =
+                parse(&params)?;
+            cmd(core
+                .plugins()
+                .update_runtime_ready(request)
+                .map_err(|e| e.to_string()))
+        }
+        #[cfg(feature = "plugins")]
+        "plugin_update_check" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Check {
+                plugin_id: Option<String>,
+            }
+            let Check { plugin_id } = parse(&params)?;
+            cmd(core
+                .plugins()
+                .check_updates(plugin_id)
+                .map_err(|e| e.to_string()))
+        }
+        #[cfg(feature = "plugins")]
+        "plugin_update_status" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Status {
+                operation_id: Option<String>,
+            }
+            let Status { operation_id } = parse(&params)?;
+            cmd(core
+                .plugins()
+                .update_status(operation_id.as_deref())
+                .map_err(|e| e.to_string()))
+        }
+        #[cfg(feature = "plugins")]
+        "plugin_update_cancel" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Cancel {
+                operation_id: String,
+            }
+            let Cancel { operation_id } = parse(&params)?;
+            cmd(core
+                .plugins()
+                .cancel_update(&operation_id)
+                .map_err(|e| e.to_string()))
+        }
+        #[cfg(feature = "plugins")]
+        "plugin_update_editing" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Editing {
+                id: String,
+                editing: bool,
+            }
+            let Editing { id, editing } = parse(&params)?;
+            cmd(core
+                .plugins()
+                .update_editing(&id, editing)
+                .map_err(|e| e.to_string()))
+        }
+        #[cfg(feature = "plugins")]
         "plugin_list" => ok(ops::plugin_list(&core.plugins())),
         #[cfg(feature = "plugins")]
         "plugin_inspect_path" => {
@@ -1876,7 +1978,7 @@ async fn invoke_core(
         "core_ping" => ok(json!({})),
         "platform_attach" => apply_platform_attach(core, parse(&params)?),
         "core_shutdown_prepare" => {
-            core.statistics().shutdown();
+            cmd(core.plugins().prepare_app_restart().await)?;
             let snapshot = core.player().snapshot().await;
             core.storage()
                 .save_queue(&snapshot)
@@ -1885,8 +1987,10 @@ async fn invoke_core(
                     retryable: false,
                     details: None,
                 })?;
+            core.statistics().shutdown();
             ok(json!({ "ok": true }))
         }
+        "core_shutdown_cancel" => { core.plugins().cancel_app_restart(); Ok(Value::Null) }
         "auth_oauth_prepare" => {
             let OAuthPrepareParams { provider_kind } = parse(&params)?;
             let profile = default_qqmusic_profile();
@@ -2050,6 +2154,15 @@ async fn invoke_core(
         | "plugin_read_asset"
         | "plugin_settings_get"
         | "plugin_settings_set"
+        | "plugin_update_policy_get"
+        | "plugin_update_policy_set"
+        | "plugin_update_check"
+        | "plugin_update_prepare"
+        | "plugin_update_apply"
+        | "plugin_update_status"
+        | "plugin_update_cancel"
+        | "plugin_update_runtime_ready"
+        | "plugin_update_editing"
         | "plugin_install_from" => Err(DispatchError::Unavailable { feature: "plugins" }),
         other => {
             debug_assert!(

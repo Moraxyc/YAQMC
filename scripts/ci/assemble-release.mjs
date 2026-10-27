@@ -129,6 +129,11 @@ export function verifyDesktopReleaseTargets(sourceDir, expectedCommit, targets =
       const feed = target.os === 'windows' ? 'latest.yml' : 'latest-linux.yml';
       if (!existsSync(path.join(directory, feed))) throw new Error(`Missing updater feed: ${feed}`);
     }
+    if (target.os === 'windows') {
+      const metadata = `updater-windows-${target.arch}.yml`;
+      if (!existsSync(path.join(directory, metadata)))
+        throw new Error(`Missing updater feed: ${metadata}`);
+    }
   }
 }
 

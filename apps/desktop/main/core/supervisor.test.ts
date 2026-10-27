@@ -349,6 +349,61 @@ describe('CoreSupervisor', () => {
     vi.useRealTimers();
   });
 
+  it('waits for both the shutdown acknowledgement and actual exit before updating files', async () => {
+    const mock = mockChild();
+    const kill = vi.spyOn(mock.child, 'kill');
+    const supervisor = new CoreSupervisor({
+      binary: coreBinaryName(),
+      hostVersion: '0.1.0',
+      expectedCoreVersion: '0.1.0',
+      autoRestart: false,
+      ...tempDirs(),
+      spawn: () => mock.child as unknown as ChildProcess,
+    });
+    const started = supervisor.start();
+    await handshakeChild(mock);
+    await started;
+    const nextFrame = collectFrames(mock.stdin);
+    let finished = false;
+    const stopped = supervisor.stopForUpdate().then(() => {
+      finished = true;
+    });
+    await expect(nextFrame()).resolves.toEqual({ kind: 'shutdown', reason: 'restart' });
+    pushMessage(mock.stdout, { kind: 'shutdown-ack' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(finished).toBe(false);
+    expect(kill).not.toHaveBeenCalled();
+    mock.child.exitCode = 0;
+    mock.child.emit('exit', 0, null);
+    await stopped;
+    expect(finished).toBe(true);
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('refuses installation when Core does not acknowledge shutdown', async () => {
+    vi.useFakeTimers();
+    const mock = mockChild();
+    const kill = vi.spyOn(mock.child, 'kill');
+    const supervisor = new CoreSupervisor({
+      binary: coreBinaryName(),
+      hostVersion: '0.1.0',
+      expectedCoreVersion: '0.1.0',
+      autoRestart: false,
+      ...tempDirs(),
+      spawn: () => mock.child as unknown as ChildProcess,
+    });
+    const started = supervisor.start();
+    await handshakeChild(mock);
+    await started;
+    const stopped = supervisor.stopForUpdate();
+    const assertion = expect(stopped).rejects.toThrow('shutdown timed out');
+    await vi.advanceTimersByTimeAsync(60_000);
+    await assertion;
+    expect(kill).not.toHaveBeenCalled();
+    mock.child.kill();
+    await supervisor.stop();
+  });
+
   it('spawns, handshakes, detects exit, and keeps a 64 KiB stderr ring', async () => {
     const { child, stdout, stdin, stderr } = mockChild();
 

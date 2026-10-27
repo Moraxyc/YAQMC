@@ -1,3 +1,4 @@
+import type { UpdatePayload } from './events';
 import type {
   AccountLoginMethod,
   AccountLoginMethodDescriptor,
@@ -84,6 +85,15 @@ import type {
 import type { PlatformAttach } from './types';
 import type { SongCommentsRequest, SongCommentsPage } from './dto';
 import type { OpenCatalogSongPayload } from './events';
+import type {
+  PluginUpdateInfo,
+  PluginUpdatePolicy,
+  PluginUpdatePolicyRequest,
+  PluginUpdatePrepareRequest,
+  PluginUpdateApplyRequest,
+  PluginUpdateOperation,
+  PluginUpdateRuntimeReadyRequest,
+} from './plugin-updates';
 
 export const MIGRATED_METHOD_NAMES = [
   'platform_diagnostics',
@@ -241,6 +251,15 @@ export const MIGRATED_METHOD_NAMES = [
   'issue_reporter_preview',
   'issue_reporter_validate_url',
   'plugin_list',
+  'plugin_update_policy_get',
+  'plugin_update_policy_set',
+  'plugin_update_check',
+  'plugin_update_prepare',
+  'plugin_update_apply',
+  'plugin_update_status',
+  'plugin_update_cancel',
+  'plugin_update_runtime_ready',
+  'plugin_update_editing',
   'plugin_inspect_path',
   'plugin_install',
   'plugin_set_enabled',
@@ -262,6 +281,14 @@ export const MIGRATED_METHOD_NAMES = [
 ] as const;
 
 export const PROTOCOL_ONLY_METHODS = [
+  'host_updater_check',
+  'host_updater_download',
+  'host_updater_install',
+  'host_updater_start',
+  'host_updater_status',
+  'host_updater_cancel',
+  'host_updater_preferences',
+  'core_shutdown_cancel',
   'core_ping',
   'platform_attach',
   'core_shutdown_prepare',
@@ -290,6 +317,14 @@ export type MethodName = (typeof METHOD_NAMES)[number];
 type Exhaustive<T extends Record<MethodName, unknown>> = T;
 
 export type MethodParams = Exhaustive<{
+  host_updater_check: void;
+  host_updater_download: void;
+  host_updater_install: void;
+  host_updater_start: { candidateId: string };
+  host_updater_status: void;
+  host_updater_cancel: void;
+  host_updater_preferences: { includePrerelease: boolean };
+  core_shutdown_cancel: void;
   platform_diagnostics: void;
   platform_export_diagnostics: void;
   system_integration_status: void;
@@ -552,6 +587,15 @@ export type MethodParams = Exhaustive<{
   issue_reporter_preview: { draft: IssueDraft; request: DiagnosticsRequest };
   issue_reporter_validate_url: { url: string };
   plugin_list: void;
+  plugin_update_policy_get: { id: string };
+  plugin_update_policy_set: NamedRequest<PluginUpdatePolicyRequest>;
+  plugin_update_check: { pluginId?: string };
+  plugin_update_prepare: NamedRequest<PluginUpdatePrepareRequest>;
+  plugin_update_apply: NamedRequest<PluginUpdateApplyRequest>;
+  plugin_update_status: { operationId?: string };
+  plugin_update_cancel: { operationId: string };
+  plugin_update_runtime_ready: NamedRequest<PluginUpdateRuntimeReadyRequest>;
+  plugin_update_editing: { id: string; editing: boolean };
   plugin_inspect_path: { path: string };
   plugin_install: NamedRequest<PluginInstallRequest>;
   plugin_set_enabled: NamedRequest<PluginEnableRequest>;
@@ -600,6 +644,14 @@ export type MethodParams = Exhaustive<{
 }>;
 
 export type MethodResult = Exhaustive<{
+  host_updater_check: UpdatePayload;
+  host_updater_download: UpdatePayload;
+  host_updater_install: UpdatePayload;
+  host_updater_start: UpdatePayload;
+  host_updater_status: UpdatePayload;
+  host_updater_cancel: UpdatePayload;
+  host_updater_preferences: UpdatePayload;
+  core_shutdown_cancel: void;
   platform_diagnostics: PlatformDiagnostics;
   platform_export_diagnostics: string;
   system_integration_status: DesktopIntegrationStatus;
@@ -755,6 +807,15 @@ export type MethodResult = Exhaustive<{
   issue_reporter_preview: IssuePreview;
   issue_reporter_validate_url: void;
   plugin_list: PluginRecord[];
+  plugin_update_policy_get: PluginUpdateInfo;
+  plugin_update_policy_set: PluginUpdatePolicy;
+  plugin_update_check: PluginUpdateOperation;
+  plugin_update_prepare: PluginUpdateOperation;
+  plugin_update_apply: PluginUpdateOperation;
+  plugin_update_status: PluginUpdateOperation[];
+  plugin_update_cancel: void;
+  plugin_update_runtime_ready: void;
+  plugin_update_editing: void;
   plugin_inspect_path: PluginInspectResult;
   plugin_install: PluginRecord;
   plugin_set_enabled: PluginRecord;
