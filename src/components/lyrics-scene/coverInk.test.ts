@@ -15,7 +15,7 @@ describe('coverInk', () => {
   });
 
   it('selects against the scene treatment for a pale cover', () => {
-    const { ink } = coverInk('#F4DFC5', { dimmed: true });
+    const { ink } = coverInk('#F4DFC5', { dimming: 0.7 });
     expect(ink).toBe('#FFFFFF');
     expect(contrastRatio('#49433B', ink)).toBeGreaterThanOrEqual(4.5);
   });

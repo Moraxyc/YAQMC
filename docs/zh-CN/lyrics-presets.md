@@ -50,6 +50,23 @@ effectivePrimary = fontBase × fontScale
 归一化 0–1 场景坐标，不是编辑器像素。组件种类：`background`、`artwork`、`metadata`、`lyrics`、
 `transport`。绑定是数据，而不是写死的示例字符串。
 
+## 动态封面背景
+
+`background.source: "dynamicArtwork"` 使用 WebGL2，以当前曲目封面渲染 Apple Music 风格的动态背景。经典与黑胶
+预设默认使用它，沉浸预设使用 `artwork`。渲染流程见 `src/components/lyrics-scene/dynamicArtworkRenderer.ts`。
+
+- 动画时钟只在播放中且可见时推进。暂停、切歌和窗口尺寸变化后从原姿态继续。封面切换交叉淡化 0.5 s。
+  减少动态效果时保持静止姿态。
+- 着色器中的 0.4 黑色遮罩是背景唯一的压暗层，歌词墨色按同样的 0.4 压暗计算。
+- WebGL2 不可用、软件光栅报告严重性能限制、上下文丢失、Linux `gpu-off` 模式或外观使用自定义图片时，
+  使用静态 `artwork` 背景。
+- `blur` 与 `influence` 只作用于静态背景。
+
+图层周期、缩放与偏移、模糊 σ、网格规模、材质常量和淡化时长来自第三方逆向研究
+（[aadishv.dev/music](https://www.aadishv.dev/music)、
+[WXRIW/Lyricify-Backgrounds](https://github.com/WXRIW/Lyricify-Backgrounds)），未经 Apple 二进制验证。
+网格控制点由种子生成，不含 Apple 网格数据。音乐响应缩放需要来自 Core 的 PCM 数据，留待后续实现。
+
 ## 预览夹具
 
 打开编排器先绘制项目自有的本地示例（一起听见 / YAQMC Studio），再尝试只读提供器搜索 +

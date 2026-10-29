@@ -2,7 +2,8 @@ import { contrastRatio, mixHex, readableForeground } from '../../application/the
 
 export function coverInk(
   hexColor: string,
-  options: { dimmed?: boolean } = {},
+  /** Fraction of black mixed over the cover by the scene treatment. */
+  options: { dimming?: number } = {},
 ): { ink: string; contrast: string } {
   const normalized = hexColor.replace('#', '');
   if (!/^[0-9a-fA-F]{6}$/.test(normalized)) {
@@ -12,7 +13,9 @@ export function coverInk(
   // Text is painted over the scene treatment, not the unfiltered cover pixel.
   // A light cover becomes dark after the artwork filter and wash, so evaluate
   // contrast against an equivalent displayed tone.
-  const displayedBackground = options.dimmed ? mixHex(background, '#000000', 0.7) : background;
+  const displayedBackground = options.dimming
+    ? mixHex(background, '#000000', options.dimming)
+    : background;
   let ink: string = readableForeground(displayedBackground);
   // The shared theme deliberately uses a softened near-black. Keep that
   // character unless it falls just below AA on a saturated mid-tone, where

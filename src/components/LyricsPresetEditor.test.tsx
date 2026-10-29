@@ -95,7 +95,7 @@ describe('LyricsPresetPicker', () => {
       'aria-pressed',
       'true',
     );
-    expect(screen.getByRole('combobox', { name: 'Background' })).toHaveValue('artwork');
+    expect(screen.getByRole('combobox', { name: 'Background' })).toHaveValue('dynamicArtwork');
     expect(screen.getByRole('slider', { name: 'Background blur' })).toBeInTheDocument();
     expect(screen.getByRole('slider', { name: 'Artwork influence' })).toBeInTheDocument();
     expect(screen.getByRole('slider', { name: 'Background opacity' })).toBeInTheDocument();

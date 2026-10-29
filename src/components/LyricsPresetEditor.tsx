@@ -1460,6 +1460,7 @@ export function LyricsPresetEditor({
                       }
                     >
                       <option value="artwork">artwork</option>
+                      <option value="dynamicArtwork">dynamic artwork</option>
                       <option value="color">color</option>
                       <option value="image">image</option>
                       <option value="gradient">gradient</option>

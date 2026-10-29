@@ -38,6 +38,8 @@ import { sceneForOrientation } from '../../application/lyrics-scene-layout';
 import { isAndroidRuntime } from '../../application/host-capabilities';
 import { usePlayerStore } from '../../application/player-store';
 import { coverInk } from './coverInk';
+import { DynamicArtworkBackdrop } from './DynamicArtworkBackdrop';
+import { DYNAMIC_BACKDROP_SCRIM } from './dynamicArtworkRenderer';
 import { LyricsTransportControls } from '../LyricsTransportControls';
 import { LyricsViewport } from './LyricsViewport';
 import type { LyricsSceneProps } from './types';
@@ -184,6 +186,7 @@ export function LyricsScene({
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [extraUrls, setExtraUrls] = useState<Record<string, string>>({});
   const [videoFailed, setVideoFailed] = useState(false);
+  const [dynamicUnavailable, setDynamicUnavailable] = useState(false);
   const [pluginVars, setPluginVars] = useState(pluginSceneCssVars());
   const [pluginState, setPluginState] = useState(pluginSceneDataState());
   const editor = mode === 'editor';
@@ -221,7 +224,19 @@ export function LyricsScene({
     appearance.baseColor ??
     palette?.primary ??
     bindings.artworkColor;
-  const ink = coverInk(backgroundInkSource, { dimmed: true });
+  // Custom images keep the static treatment; GPU-off Linux modes skip live rendering.
+  const dynamicBackdrop =
+    scene.background.visible &&
+    scene.background.source === 'dynamicArtwork' &&
+    appearance.mode !== 'image' &&
+    Boolean(appearance.imageSource) &&
+    !dynamicUnavailable &&
+    !linuxSkipsLiveVideo();
+  // The static treatment is brightness(0.55) under a 0.46 black wash, about 70%
+  // black. The dynamic backdrop darkens only through its own scrim.
+  const ink = coverInk(backgroundInkSource, {
+    dimming: dynamicBackdrop ? DYNAMIC_BACKDROP_SCRIM : 0.7,
+  });
 
   useLayoutEffect(() => {
     const node = root.current;
@@ -407,7 +422,8 @@ export function LyricsScene({
       {!editor && <ScenePlaybackState editor={false} isPlaying={bindings.isPlaying} />}
       {scene.background.visible &&
         appearance.imageSource &&
-        scene.background.source !== 'video' && (
+        scene.background.source !== 'video' &&
+        !dynamicBackdrop && (
           <div
             className="lyrics-stage__backdrop"
             data-widget="background"
@@ -423,6 +439,15 @@ export function LyricsScene({
             aria-hidden="true"
           />
         )}
+      {dynamicBackdrop && (
+        <DynamicArtworkBackdrop
+          source={bindings.artworkSrc ?? appearance.imageSource}
+          animating={(editor ? bindings.isPlaying : runtimePlaying) && !reducedMotion}
+          opacity={scene.background.opacity}
+          selected={selectedWidgetId === 'background'}
+          onUnavailable={() => setDynamicUnavailable(true)}
+        />
+      )}
       {scene.background.visible &&
         scene.background.source === 'gradient' &&
         scene.background.gradient && (
@@ -473,7 +498,9 @@ export function LyricsScene({
             ))}
           </div>
         )}
-      {scene.background.visible && <div className="lyrics-stage__wash" aria-hidden="true" />}
+      {scene.background.visible && !dynamicBackdrop && (
+        <div className="lyrics-stage__wash" aria-hidden="true" />
+      )}
 
       {scene.artwork.visible && (
         <SceneWidget

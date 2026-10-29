@@ -35,7 +35,7 @@ export type LyricsArtworkStyle = 'square' | 'vinyl';
 export type LyricsArtworkRenderer = 'square' | 'rounded' | 'vinyl';
 export type LyricsBackgroundFit = 'cover' | 'contain';
 export type LyricsBackgroundKind =
-  'color' | 'artwork' | 'image' | 'gradient' | 'video' | 'colorField';
+  'color' | 'artwork' | 'dynamicArtwork' | 'image' | 'gradient' | 'video' | 'colorField';
 export type LyricsPreviewFrame = 'desktop' | 'portrait' | 'window' | 'ultrawide';
 export type WidgetAnchor =
   | 'top-left'
@@ -270,7 +270,7 @@ function widgetBox(
 }
 
 function factoryBackground(
-  extras: Partial<Pick<BackgroundWidget, 'blur' | 'influence' | 'fit'>> = {},
+  extras: Partial<Pick<BackgroundWidget, 'source' | 'blur' | 'influence' | 'fit'>> = {},
 ): BackgroundWidget {
   return {
     id: 'background',
@@ -278,7 +278,7 @@ function factoryBackground(
     zIndex: 0,
     visible: true,
     locked: false,
-    source: 'artwork',
+    source: extras.source ?? 'dynamicArtwork',
     fit: extras.fit ?? 'cover',
     fallbackColor: defaultBackground.fallbackColor,
     opacity: 1,
@@ -303,7 +303,8 @@ function factoryTransport(layout: LyricCoverLayout = 'split'): TransportWidget {
 export function factoryScene(layout: LyricCoverLayout): LyricsSceneLayout {
   if (layout === 'full') {
     return {
-      background: factoryBackground({ blur: 0, influence: 0.55 }),
+      // The cover fills the left half; the lyric column already blurs what is behind it.
+      background: factoryBackground({ source: 'artwork', blur: 0, influence: 0.55 }),
       artwork: {
         ...widgetBox(0.25, 0.5, 0.5, 1, { zIndex: 1 }),
         id: 'artwork',
@@ -538,6 +539,7 @@ function isBackgroundKind(value: unknown): value is LyricsBackgroundKind {
   return (
     value === 'color' ||
     value === 'artwork' ||
+    value === 'dynamicArtwork' ||
     value === 'image' ||
     value === 'gradient' ||
     value === 'video' ||

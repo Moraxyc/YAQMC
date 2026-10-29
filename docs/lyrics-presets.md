@@ -66,10 +66,30 @@ Normalized 0–1 scene coordinates, not editor pixels:
 - Artwork extras: `renderer` (`square` | `rounded` | `vinyl`), opacity, radius
 - Lyrics extras: `align`, `followAnchor` (default 0.35)
 - Metadata extras: `align`, title/artist scale
-- Background: `source` (`color` | `artwork` | `image`), fit, fallback color, opacity, influence, blur
+- Background: `source` (`color` | `artwork` | `dynamicArtwork` | `image`), fit, fallback color, opacity, influence, blur
 
 Bindings are data, not stored sample strings: artwork = current track artwork, lyrics = current track lyrics,
 transport = playback.
+
+## Dynamic artwork background
+
+`background.source: "dynamicArtwork"` renders an Apple Music-style animated backdrop from the current
+track artwork with WebGL2. Classic and Vinyl use it by default; Immersive uses `artwork`. The pipeline is
+documented in `src/components/lyrics-scene/dynamicArtworkRenderer.ts`.
+
+- The animation clock advances only while playing and visible. Pause, track changes and resizes continue
+  from the same pose. Artwork changes cross-fade over 0.5 s. Reduced motion holds a static pose.
+- The shader's 0.4 black scrim is the backdrop's only darkening layer. Lyric ink selection uses the same
+  0.4 dimming.
+- The static `artwork` backdrop is used when WebGL2 is unavailable, a software rasterizer reports a major
+  performance caveat, the context is lost, Linux runs in `gpu-off` mode, or Appearance uses a custom image.
+- `blur` and `influence` apply only to the static backdrop.
+
+Layer periods, scales and offsets, blur sigma, grid sizes, material constants and cross-fade length come
+from third-party reverse engineering ([aadishv.dev/music](https://www.aadishv.dev/music),
+[WXRIW/Lyricify-Backgrounds](https://github.com/WXRIW/Lyricify-Backgrounds)) and are unverified against
+Apple binaries. Mesh control points are generated from a seed; no Apple mesh data is included.
+Music-reactive scaling needs PCM from Core and is a follow-up.
 
 ## Built-in preview sample
 
